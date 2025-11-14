@@ -8,7 +8,7 @@ const artistController = require("../controllers/artistController");
 const bankController = require("../controllers/bankController");
 const upload = require("../middlewares/upload");
 const contractController = require("../controllers/contractController");
-
+const conversionController = require("../controllers/conversionController");
 //Auth Apis
 router.post("/login", authController.login);
 router.post("/forgot-password", authController.forgotPassword);
@@ -49,6 +49,12 @@ router.delete("/deleteContract/:id", authMiddleware, contractController.deleteCo
 router.get("/contractLogs", authMiddleware, contractController.getContractLogs);
 router.get("/getContractLogById", authMiddleware, contractController.getContractLogById);
 router.post("/sendContractReminder/:id", authMiddleware, contractController.sendContractReminder);
+router.post("/sendContractWhatsappReminder/:id", authMiddleware, contractController.sendContractWhatsappReminder);
+
+
+//Xlsx Apis
+router.post("/convert-xlsx-xml", upload.single("file"), conversionController.convertXlsxToXml
+);
 
 
 

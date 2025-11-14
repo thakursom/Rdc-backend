@@ -12,7 +12,9 @@
     "mongoose": "^8.19.2",
     "morgan": "^1.10.1",
     "multer": "^2.0.2",
-    "nodemailer": "^7.0.10"
+    "nodemailer": "^7.0.10",
+    "xlsx": "^0.18.5",
+    "xmlbuilder2": "^4.0.0"
   },
   "name": "rdc_project",
   "version": "1.0.0",

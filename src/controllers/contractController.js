@@ -7,6 +7,7 @@ const ContractLog = require("../models/contractLogModel");
 const ResponseService = require("../services/responseService");
 const sendEmail = require("../utils/sendEmail");
 const contractReminderTemplate = require("../utils/emailTemplates/contractReminderTemplate");
+const sendWhatsappMessage = require("../utils/messente");
 
 
 
@@ -480,6 +481,60 @@ class contractController {
             res.status(500).json({ success: false, message: "Error sending reminder email" });
         }
     }
+
+    async sendContractWhatsappReminder(req, res, next) {
+        try {
+            const { id } = req.params;
+
+            // Find contract
+            const contract = await Contract.findById(id);
+            console.log("contract", contract);
+            return
+
+            if (!contract) {
+                return res.status(404).json({ success: false, message: "Contract not found" });
+            }
+
+            // Find user
+            const user = await User.findOne(
+                { id: contract.user_id },
+                "phone name"
+            );
+
+            if (!user || !user.phone) {
+                return res
+                    .status(400)
+                    .json({ success: false, message: "Client phone number not found" });
+            }
+
+            // WhatsApp message content
+            const message = `Hello ${user.name}, your contract "${contract.contractName}" is expiring on ${contract.endDate}. Please take necessary action.`;
+
+            // Call Messente API
+            // await sendWhatsappMessage({
+            //     to: user.phone,
+            //     message
+            // });
+
+            await sendWhatsappMessage({
+                to: 8726099200,
+                message
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: "WhatsApp reminder sent successfully"
+            });
+
+        } catch (error) {
+            console.error("Error sending WhatsApp reminder:", error);
+            res.status(500).json({
+                success: false,
+                message: "Error sending WhatsApp reminder"
+            });
+        }
+    }
+
 
 }
 
