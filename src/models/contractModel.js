@@ -10,6 +10,10 @@ const ContractSchema = new mongoose.Schema({
         type: String,
         required: true,
     },
+    description: {
+        type: String,
+        default: ""
+    },
     startDate: {
         type: Date,
         required: true,

@@ -20,6 +20,7 @@ router.get("/fetchUser", authMiddleware, rbacMiddleware("user:view"), userContro
 router.get("/fetchAllUser", authMiddleware, userController.getAllUsers);
 router.get("/fetchSubLabel", authMiddleware, userController.fetchSubLabel);
 router.get("/fetchAllLabel", authMiddleware, userController.fetchAllLabels);
+router.get("/fetchAllSubLabel", authMiddleware, userController.fetchAllSubLabel);
 router.post("/add-user", authMiddleware, userController.addUser);
 
 //Artist Apis
@@ -50,6 +51,7 @@ router.get("/contractLogs", authMiddleware, contractController.getContractLogs);
 router.get("/getContractLogById", authMiddleware, contractController.getContractLogById);
 router.post("/sendContractReminder/:id", authMiddleware, contractController.sendContractReminder);
 router.post("/sendContractWhatsappReminder/:id", authMiddleware, contractController.sendContractWhatsappReminder);
+router.get("/fetchLabelAndSubLabelContract", authMiddleware, contractController.fetchLabelAndSubLabelContract);
 
 
 //Xlsx Apis

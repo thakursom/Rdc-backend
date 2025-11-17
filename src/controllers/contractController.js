@@ -21,11 +21,10 @@ class contractController {
             const {
                 label,
                 contractName,
+                description,
                 startDate,
                 endDate,
-                // artistPercentage,
-                labelPercentage,
-                // producerPercentage
+                labelPercentage
             } = req.body;
 
             if (!req.file) {
@@ -38,11 +37,10 @@ class contractController {
             const newContract = await Contract.create({
                 user_id: label,
                 contractName,
+                description: description || "",
                 startDate,
                 endDate,
-                // artistPercentage: artistPercentage || 0,
                 labelPercentage: labelPercentage || 0,
-                // producerPercentage: producerPercentage || 0,
                 pdf: req.file.filename,
             });
 
@@ -76,11 +74,10 @@ class contractController {
             const {
                 label,
                 contractName,
+                description,
                 startDate,
                 endDate,
-                // artistPercentage,
-                labelPercentage,
-                // producerPercentage
+                labelPercentage
             } = req.body;
 
             if (!id) {
@@ -97,7 +94,7 @@ class contractController {
                 });
             }
 
-            // ✅ Find existing contract
+            // Find existing contract
             const existingContract = await Contract.findById(id);
             if (!existingContract) {
                 return res.status(404).json({
@@ -106,7 +103,7 @@ class contractController {
                 });
             }
 
-            // ✅ Delete old PDF if new one uploaded
+            // Delete old PDF if new uploaded
             let pdfFile = existingContract.pdf;
             if (req.file) {
                 const oldFilePath = path.join(
@@ -120,20 +117,19 @@ class contractController {
                 pdfFile = req.file.filename;
             }
 
-            // ✅ Update contract using findByIdAndUpdate
+            // Update contract
             const updatedContract = await Contract.findByIdAndUpdate(
                 id,
                 {
                     user_id: label,
                     contractName,
+                    description: description || "",
                     startDate,
                     endDate,
-                    // artistPercentage: artistPercentage || 0,
                     labelPercentage: labelPercentage || 0,
-                    // producerPercentage: producerPercentage || 0,
                     pdf: pdfFile,
                 },
-                { new: true } // return updated document
+                { new: true }
             );
 
             await ContractLog.create({
@@ -160,34 +156,133 @@ class contractController {
     }
 
     //getAllContracts method
+    // async getAllContracts(req, res, next) {
+    //     try {
+    //         let { page = 1, limit = 10, search = "" } = req.query;
+    //         page = Number(page);
+    //         limit = Number(limit);
+
+    //         // ✅ Build search query
+    //         const query = search
+    //             ? {
+    //                 $or: [
+    //                     { contractName: { $regex: search, $options: "i" } },
+    //                     { label: { $regex: search, $options: "i" } },
+    //                 ],
+    //             }
+    //             : {};
+
+    //         // ✅ Total count for pagination
+    //         const total = await Contract.countDocuments(query);
+
+    //         // ✅ Fetch paginated data with user details
+    //         const data = await Contract.aggregate([
+    //             { $match: query },
+
+    //             {
+    //                 $lookup: {
+    //                     from: "users",           // MongoDB collection name for User
+    //                     localField: "user_id",   // Contract.user_id
+    //                     foreignField: "id",      // User.id (Number)
+    //                     as: "user"
+    //                 }
+    //             },
+    //             {
+    //                 $unwind: {
+    //                     path: "$user",
+    //                     preserveNullAndEmptyArrays: true
+    //                 }
+    //             },
+
+    //             { $sort: { createdAt: -1 } },
+    //             { $skip: (page - 1) * limit },
+    //             { $limit: limit },
+
+    //             {
+    //                 $project: {
+    //                     _id: 1,
+    //                     user_id: 1,
+    //                     contractName: 1,
+    //                     description: 1,
+    //                     label: 1,
+    //                     startDate: 1,
+    //                     endDate: 1,
+    //                     pdf: 1,
+    //                     status: 1,
+    //                     createdAt: 1,
+    //                     userName: "$user.name",
+    //                     userEmail: "$user.email"
+    //                 }
+    //             }
+    //         ]);
+
+    //         // ✅ Send paginated response
+    //         return res.status(200).json({
+    //             success: true,
+    //             message: "Contracts fetched successfully",
+    //             data,
+    //             pagination: {
+    //                 total,
+    //                 page,
+    //                 limit,
+    //                 totalPages: Math.ceil(total / limit),
+    //             },
+    //         });
+
+    //     } catch (error) {
+    //         console.error("Fetch Contracts Error:", error);
+    //         return res.status(500).json({
+    //             success: false,
+    //             message: error.message || "Internal server error",
+    //         });
+    //     }
+    // }
+
     async getAllContracts(req, res, next) {
         try {
             let { page = 1, limit = 10, search = "" } = req.query;
+            const { role, userId } = req.user;
+
             page = Number(page);
             limit = Number(limit);
 
-            // ✅ Build search query
-            const query = search
-                ? {
-                    $or: [
-                        { contractName: { $regex: search, $options: "i" } },
-                        { label: { $regex: search, $options: "i" } },
-                    ],
-                }
-                : {};
+            let query = {};
 
-            // ✅ Total count for pagination
+            // 🔍 Search filter
+            if (search) {
+                query.$or = [
+                    { contractName: { $regex: search, $options: "i" } },
+                    { label: { $regex: search, $options: "i" } },
+                ];
+            }
+
+            // 🔥 NEW LOGIC: If NOT Super Admin → find all child users
+            if (role !== "Super Admin") {
+                // 1️⃣ Find users where parent_id = logged in user
+                const users = await User.find({ parent_id: userId }, { id: 1 });
+
+                // 2️⃣ Extract IDs
+                const childIds = users.map(u => u.id);
+
+                // 3️⃣ Also include own ID
+                // childIds.push(userId);
+
+                // 4️⃣ Apply condition → user_id IN [...all ids]
+                query.user_id = { $in: childIds };
+            }
+
+            // Count
             const total = await Contract.countDocuments(query);
 
-            // ✅ Fetch paginated data with user details
+            // Aggregation
             const data = await Contract.aggregate([
                 { $match: query },
 
                 {
                     $lookup: {
-                        from: "users",           // MongoDB collection name for User
-                        localField: "user_id",   // Contract.user_id
-                        foreignField: "id",      // User.id (Number)
+                        from: "users",
+                        localField: "user_id",
+                        foreignField: "id",
                         as: "user"
                     }
                 },
@@ -207,6 +302,7 @@ class contractController {
                         _id: 1,
                         user_id: 1,
                         contractName: 1,
+                        description: 1,
                         label: 1,
                         startDate: 1,
                         endDate: 1,
@@ -214,12 +310,11 @@ class contractController {
                         status: 1,
                         createdAt: 1,
                         userName: "$user.name",
-                        userEmail: "$user.email"
+                        userEmail: "$user.email",
                     }
                 }
             ]);
 
-            // ✅ Send paginated response
             return res.status(200).json({
                 success: true,
                 message: "Contracts fetched successfully",
@@ -482,6 +577,7 @@ class contractController {
         }
     }
 
+    //sendContractWhatsappReminder method
     async sendContractWhatsappReminder(req, res, next) {
         try {
             const { id } = req.params;
@@ -535,6 +631,72 @@ class contractController {
         }
     }
 
+    //fetchLabelAndSubLabelContract method
+    async fetchLabelAndSubLabelContract(req, res) {
+        try {
+            const { id } = req.query;
+
+            if (!id) {
+                return ResponseService.error(res, "id is required", 400);
+            }
+
+            const numericId = Number(id);
+
+            // Fetch all sub-users
+            const users = await User.find({ parent_id: numericId });
+
+            const userIds = users.map(u => u.id);
+
+            // Aggregation to fetch contracts + user name
+            const contract = await Contract.aggregate([
+                {
+                    $match: {
+                        user_id: { $in: userIds }
+                    }
+                },
+                {
+                    $lookup: {
+                        from: "users",               // MongoDB collection name
+                        localField: "user_id",
+                        foreignField: "id",
+                        as: "userInfo"
+                    }
+                },
+                {
+                    $unwind: {
+                        path: "$userInfo",
+                        preserveNullAndEmptyArrays: true
+                    }
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        user_id: 1,
+                        contractName: 1,
+                        pdf: 1,
+                        startDate: 1,
+                        endDate: 1,
+                        labelPercentage: 1,
+                        description: 1,
+                        status: 1,
+                        userName: "$userInfo.name"  // 👈 Add username here
+                    }
+                }
+            ]);
+
+            return ResponseService.success(
+                res,
+                "Contract details fetched successfully",
+                { contract }
+            );
+
+        } catch (error) {
+            return res.status(500).json({
+                success: false,
+                message: error.message
+            });
+        }
+    }
 
 }
 

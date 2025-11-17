@@ -9,29 +9,33 @@ class ArtistController {
     //getAllArtists method
     async getAllArtists(req, res, next) {
         try {
-            const { role } = req.user;
+            const { role, userId } = req.user;
             const { page = 1, limit = 20, search } = req.query;
 
-            if (role !== "Super Admin") {
-                return ResponseService.error(res, "Access denied. Only Super Admin can view artists.", 403);
-            }
-
             const skip = (page - 1) * limit;
+
+            // ---- BASE QUERY ----
             let query = {};
 
-            // ✅ Search on name
+            // ✅ If NOT Super Admin → filter by userId
+            if (role !== "Super Admin") {
+                query.user_id = userId;
+            }
+
+            // ✅ Search filter
             if (search && search.trim() !== "") {
                 const regex = new RegExp(search, "i");
                 query.name = regex;
             }
 
+            // ---- FETCH DATA ----
             const artists = await Artist.find(query)
                 .skip(skip)
                 .limit(Number(limit));
 
             const total = await Artist.countDocuments(query);
 
-            return ResponseService.success(res, "All artists fetched successfully", {
+            return ResponseService.success(res, "Artists fetched successfully", {
                 artists,
                 pagination: {
                     total,
@@ -40,7 +44,6 @@ class ArtistController {
                     totalPages: Math.ceil(total / limit)
                 }
             });
-
 
         } catch (error) {
             return ResponseService.error(res, "Failed to fetch artists", 500, error);

@@ -177,6 +177,29 @@ class UserController {
         }
     }
 
+    //fetchAllSubLabel method
+    async fetchAllSubLabel(req, res, next) {
+        try {
+
+            const { userId } = req.user;
+
+            const { search } = req.query;
+
+            let query = { parent_id: userId };
+
+            if (search) {
+                query.name = { $regex: search, $options: "i" };
+            }
+
+            const labels = await User.find(query)
+                .select("_id id name parent_id");
+
+            return ResponseService.success(res, "Labels fetched successfully", { labels });
+
+        } catch (error) {
+            next(error);
+        }
+    }
 
 }
 
