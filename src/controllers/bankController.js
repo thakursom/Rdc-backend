@@ -277,6 +277,87 @@ class AuthController {
     }
 
 
+    async getBankDetailByUserId(req, res, next) {
+        try {
+            let { page = 1, limit = 10, search = "" } = req.query;
+            const { userId } = req.user;
+
+            page = Number(page);
+            limit = Number(limit);
+
+            // FILTER ONLY LOGGED IN USER DATA
+            const baseQuery = { user_id: userId };
+
+            const query = search
+                ? {
+                    ...baseQuery,
+                    $or: [
+                        { bankName: { $regex: search, $options: "i" } },
+                        { accountHolderName: { $regex: search, $options: "i" } },
+                        { paypalEmail: { $regex: search, $options: "i" } },
+                        { upiId: { $regex: search, $options: "i" } },
+                    ]
+                }
+                : baseQuery;
+
+            // Total count for pagination
+            const total = await BankDetail.countDocuments(query);
+
+            const data = await BankDetail.aggregate([
+                { $match: query },
+
+                {
+                    $lookup: {
+                        from: "users",
+                        localField: "user_id",
+                        foreignField: "id",
+                        as: "user"
+                    }
+                },
+                {
+                    $unwind: {
+                        path: "$user",
+                        preserveNullAndEmptyArrays: true
+                    }
+                },
+
+                { $skip: (page - 1) * limit },
+                { $limit: limit },
+
+                {
+                    $project: {
+                        paymentMethod: 1,
+                        bankName: 1,
+                        accountHolderName: 1,
+                        accountNumber: 1,
+                        ifscRouting: 1,
+                        swiftCode: 1,
+                        branch: 1,
+                        paypalEmail: 1,
+                        upiId: 1,
+                        userName: "$user.name",
+                        userEmail: "$user.email"
+                    }
+                }
+            ]);
+
+            return ResponseService.success(res, "Bank details fetched", {
+                data,
+                pagination: {
+                    total,
+                    page,
+                    limit,
+                    totalPages: Math.ceil(total / limit)
+                }
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
+
+
 }
 
 module.exports = new AuthController();

@@ -39,6 +39,7 @@ router.get("/getBankDetails", authMiddleware, bankController.getBankDetails);
 router.put("/editBankDetails/:id", authMiddleware, bankController.editBankDetails);
 router.get("/getBankDetailById", authMiddleware, bankController.getBankDetailById);
 router.delete("/deleteBankDetail/:id", authMiddleware, bankController.deleteBankDetail);
+router.get("/getBankDetailByUserId", authMiddleware, bankController.getBankDetailByUserId);
 
 
 //Contract Apis

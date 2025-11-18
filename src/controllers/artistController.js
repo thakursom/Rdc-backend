@@ -9,9 +9,9 @@ class ArtistController {
     //getAllArtists method
     async getAllArtists(req, res, next) {
         try {
-            console.log("req.user",req.user)
+            console.log("req.user", req.user)
             const { role, userId } = req.user;
-            console.log("userId",userId);
+            console.log("userId", userId);
             const { page = 1, limit = 20, search } = req.query;
 
             const skip = (page - 1) * limit;
@@ -21,7 +21,7 @@ class ArtistController {
 
             // ✅ If NOT Super Admin → filter by userId
             if (role !== "Super Admin") {
-                query.user_id = userId;
+                query.created_by = userId;
                 console.log("labelll");
             }
 
