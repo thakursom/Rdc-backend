@@ -38,7 +38,7 @@ class ArtistController {
 
             const total = await Artist.countDocuments(query);
 
-            return ResponseService.success(res, "Artists fetched successfully", {
+            return ResponseService.success(res, "Artists fetched successfully....", {
                 artists,
                 pagination: {
                     total,
