@@ -30,9 +30,9 @@ class UserController {
                 search
             } = req.query;
 
-            if (role !== "Super Admin") {
-                return ResponseService.error(res, "Access denied. Only Super Admin can view artists.", 403);
-            }
+            // if (role !== "Super Admin") {
+            //     return ResponseService.error(res, "Access denied. Only Super Admin can view artists.", 403);
+            // }
 
             const skip = (page - 1) * limit;
             let query = {};
@@ -42,6 +42,8 @@ class UserController {
                 query.role = "Label";
             } else if (filterRole === "manager") {
                 query.role = { $in: ["Super Admin", "Manager"] };
+            } else if (filterRole === "sub label") {
+                query.role = "Sub Label";
             }
 
             // Search filter (name, email, role)

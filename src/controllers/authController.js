@@ -122,10 +122,10 @@ class AuthController {
     //changePassword method
     async changePassword(req, res) {
         try {
-            const { id } = req.user;
+            const { _id } = req.user;
             const { oldPassword, newPassword } = req.body;
 
-            const user = await User.findById(id);
+            const user = await User.findById(_id);
             if (!user) return ResponseService.error(res, "User not found", 404);
 
             const isMatch = await bcrypt.compare(oldPassword, user.password);
