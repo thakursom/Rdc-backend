@@ -20,6 +20,12 @@ app.use("/uploads/contracts", express.static(path.join(__dirname, "uploads/contr
 app.get("/", (req, res) => {
     res.send("API is running...");
 });
+
+app.use((req, res, next) => {
+    console.log("Incoming request:", req.method, req.url);
+    next();
+});
+
 app.use("/api", routes);
 
 // Global Error Handler
