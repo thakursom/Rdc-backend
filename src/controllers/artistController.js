@@ -12,6 +12,7 @@ class ArtistController {
             console.log("req.user", req.user)
             const { role, userId } = req.user;
             console.log("userId", userId);
+            console.log("login")
             const { page = 1, limit = 20, search } = req.query;
 
             const skip = (page - 1) * limit;
