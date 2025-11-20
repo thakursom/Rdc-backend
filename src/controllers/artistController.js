@@ -8,6 +8,8 @@ class ArtistController {
 
     //getAllArtists method
     async getAllArtists(req, res, next) {
+        console.log("testinggg");
+        
         try {
             console.log("req.user", req.user)
             const { role, userId } = req.user;

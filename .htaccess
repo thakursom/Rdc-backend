@@ -1,0 +1,22 @@
+# Enable rewrite engine
+RewriteEngine On
+
+# Set base if your app is under a subfolder
+RewriteBase /Rdc-backend/
+
+# Serve existing files and directories directly
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Proxy everything else to Node.js app
+RewriteRule ^(.*)$ http://127.0.0.1:3000/$1 [P,L]
+
+# Reverse proxy support
+# ProxyPass /Rdc-backend/ http://127.0.0.1:3000/
+# ProxyPassReverse /Rdc-backend/ http://127.0.0.1:3000/
+
+# Optional: fix headers for Node.js app
+RequestHeader set X-Forwarded-Proto "https"
+RequestHeader set X-Forwarded-Port "443"
+RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
