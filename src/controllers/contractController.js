@@ -240,8 +240,8 @@ class contractController {
 
     async getAllContracts(req, res, next) {
         try {
-            let { page = 1, limit = 10, search = "" } = req.query;
-            const { role, userId } = req.user;
+            let { role, userId, page = 1, limit = 10, search = "" } = req.query;
+            // const { role, userId } = req.user;
 
             page = Number(page);
             limit = Number(limit);

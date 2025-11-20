@@ -8,12 +8,13 @@ class ArtistController {
 
     //getAllArtists method
     async getAllArtists(req, res, next) {
+        console.log("testinggg");
         try {
             console.log("req.user", req.user)
-            const { role, userId } = req.user;
+            const { role, userId, page = 1, limit = 20, search } = req.query;
+            // const { role, userId } = req.user;
             console.log("userId", userId);
             console.log("login")
-            const { page = 1, limit = 20, search } = req.query;
 
             const skip = (page - 1) * limit;
 
