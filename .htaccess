@@ -15,18 +15,16 @@ RequestHeader set X-Forwarded-Proto "https"
 RequestHeader set X-Forwarded-Port "443"
 RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
 
-# Disable caching for API URLs
+# --- DISABLE CACHING FOR API (Correct cPanel compatible method) ---
 <IfModule mod_headers.c>
-    <LocationMatch "^/Rdc-backend/api/">
-        Header always set Cache-Control "no-store, no-cache, must-revalidate, max-age=0, private"
-        Header always set Pragma "no-cache"
-        Header always set Expires "0"
-    </LocationMatch>
+    Header always set Cache-Control "no-store, no-cache, must-revalidate, private"
+    Header always set Pragma "no-cache"
+    Header always set Expires "0"
 </IfModule>
 
-# Disable Apache cache for API
+# Disable Apache cache (safe)
 <IfModule mod_cache.c>
-    CacheDisable /Rdc-backend/api/
+    CacheDisable /
 </IfModule>
 
 # Prevent proxies from caching
