@@ -1,6 +1,12 @@
 # Enable Rewrite Engine
 RewriteEngine On
 
+# --- ALLOW DIRECT ACCESS TO UPLOADS ---
+# If URL starts with /Rdc-backend/uploads -> send to Node (not Apache)
+RewriteCond %{REQUEST_URI} ^/Rdc-backend/uploads/ [NC]
+RewriteRule ^uploads/(.*)$ http://127.0.0.1:3000/uploads/$1 [P,L]
+
+# --- EXISTING API PROXY ---
 # Proxy all /api/ requests to Node
 RewriteRule ^api/(.*)$ http://127.0.0.1:3000/api/$1 [P,L]
 
@@ -23,7 +29,7 @@ RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
     CacheDisable /api/
 </IfModule>
 
-# Optional: For extra safety, prevent proxies from caching
+# Prevent proxies from caching API responses
 <IfModule mod_proxy.c>
     Header always set Vary "Authorization,Accept-Encoding"
 </IfModule>
