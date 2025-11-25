@@ -20,7 +20,6 @@ class revenueUploadController {
     //uploadRevenue method
     async uploadRevenue(req, res, next) {
         try {
-
             const { userId } = req.user;
             const { platform, periodFrom, periodTo } = req.body;
 
@@ -28,18 +27,24 @@ class revenueUploadController {
                 return res.status(400).json({ error: "No file uploaded" });
             }
 
-            // Save file metadata
+            // Extract only relative path: uploads/contracts/FILE_NAME
+            const relativePath = `uploads/revenues/${req.file.filename}`;
+
+            // Create public URL
+            const fileURL = `${req.protocol}://${req.get("host")}/${relativePath}`;
+
+            // Store upload record
             const RevenueUploads = await RevenueUpload.create({
                 user_id: userId,
                 platform,
                 periodFrom,
                 periodTo,
                 fileName: req.file.filename,
-                filePath: req.file.path,
+                filePath: fileURL,
                 fileExt: req.file.mimetype,
             });
 
-            // Read Excel
+            // ---- Excel Parsing ----
             const workbook = XLSX.readFile(req.file.path);
             const sheet = workbook.Sheets[workbook.SheetNames[0]];
             const jsonData = XLSX.utils.sheet_to_json(sheet);
@@ -48,66 +53,26 @@ class revenueUploadController {
                 return res.status(400).json({ error: "Excel file is empty" });
             }
 
-            // Save into platform collection
-            if (platform === "Spotify") {
-                const rows = jsonData.map(row => ({
-                    uploadId: RevenueUploads._id,
-                    ...row
-                }));
+            const rows = jsonData.map(row => ({
+                uploadId: RevenueUploads._id,
+                ...row
+            }));
 
-                await SpotifyRevenue.insertMany(rows);
+            const modelMap = {
+                Spotify: SpotifyRevenue,
+                AppleItunes: AppleRevenue,
+                Gaana: GaanaRevenue,
+                JioSaavan: JioSaavanRevenue,
+                Facebook: FacebookRevenue,
+                Amazon: AmazonRevenue,
+                TikTok: TikTokRevenue
+            };
 
-            } else if (platform === "AppleItunes") {
-                const rows = jsonData.map(row => ({
-                    uploadId: RevenueUploads._id,
-                    ...row
-                }));
-
-                await AppleRevenue.insertMany(rows);
-
-            } else if (platform === "Gaana") {
-                const rows = jsonData.map(row => ({
-                    uploadId: RevenueUploads._id,
-                    ...row
-                }));
-
-                await GaanaRevenue.insertMany(rows);
-
-            } else if (platform === "JioSaavan") {
-                const rows = jsonData.map(row => ({
-                    uploadId: RevenueUploads._id,
-                    ...row
-                }));
-
-                await JioSaavanRevenue.insertMany(rows);
-
-            } else if (platform === "Facebook") {
-                const rows = jsonData.map(row => ({
-                    uploadId: RevenueUploads._id,
-                    ...row
-                }));
-
-                await FacebookRevenue.insertMany(rows);
-
-            } else if (platform === "Amazon") {
-                const rows = jsonData.map(row => ({
-                    uploadId: RevenueUploads._id,
-                    ...row
-                }));
-                console.log("rows", rows);
-                await AmazonRevenue.insertMany(rows);
-
-            } else if (platform === "TikTok") {
-                const rows = jsonData.map(row => ({
-                    uploadId: RevenueUploads._id,
-                    ...row
-                }));
-
-                await TikTokRevenue.insertMany(rows);
-
+            if (modelMap[platform]) {
+                await modelMap[platform].insertMany(rows);
             }
 
-            res.json({
+            return res.json({
                 success: true,
                 message: "File uploaded and processed successfully",
                 uploadId: RevenueUploads._id
@@ -162,29 +127,6 @@ class revenueUploadController {
     }
 
 
-    async downloadRevenueFile(req, res, next) {
-        try {
-            const { filePath } = req.query;
-
-            if (!filePath) {
-                return res.status(400).json({ success: false, message: "File path required" });
-            }
-
-            // Convert to absolute path
-            const absolutePath = path.resolve(filePath);
-
-            // Check if file exists
-            if (!fs.existsSync(absolutePath)) {
-                return res.status(404).json({ success: false, message: "File not found" });
-            }
-
-            return res.download(absolutePath);
-        } catch (error) {
-            console.error("Download error:", error);
-            return res.status(500).json({ success: false, message: "Error downloading file" });
-        }
-
-    }
 }
 
 module.exports = new revenueUploadController();

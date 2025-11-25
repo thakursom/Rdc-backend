@@ -68,7 +68,6 @@ router.post("/convert-xlsx-xml", upload.single("file"), conversionController.con
 
 router.post("/upload-revenue", authMiddleware, upload.single("file"), revenueController.uploadRevenue);
 router.get("/fetchAllRevenueUploads", authMiddleware, revenueController.getAllRevenueUploads);
-router.get("/downloadRevenueFile", authMiddleware, revenueController.downloadRevenueFile);
 
 
 
