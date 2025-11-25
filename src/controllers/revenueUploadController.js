@@ -79,8 +79,7 @@ class revenueUploadController {
             });
 
         } catch (error) {
-            console.log(error);
-            res.status(500).json({ error: error.message });
+            next(error)
         }
     }
 
@@ -122,8 +121,7 @@ class revenueUploadController {
             });
 
         } catch (error) {
-            console.log(error);
-            return res.status(500).json({ success: false, error: error.message });
+            next(error)
         }
     }
 
