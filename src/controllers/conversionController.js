@@ -19,27 +19,39 @@ class conversionController {
             const sheetName = workbook.SheetNames[0];
             const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
+            // Function to sanitize XML keys
+            const sanitizeKey = (key) => {
+                return key
+                    .replace(/[^a-zA-Z0-9_]/g, "_")
+                    .replace(/^[0-9]/, "_$&");
+            };
+
+            // Convert rows with sanitized keys
+            const cleanedRows = sheetData.map(row => {
+                const cleaned = {};
+                Object.keys(row).forEach(key => {
+                    cleaned[sanitizeKey(key)] = row[key];
+                });
+                return cleaned;
+            });
+
             const xmlObj = {
                 root: {
-                    row: sheetData.map((item) => ({ item })),
-                },
+                    row: cleanedRows
+                }
             };
 
             const xmlContent = create(xmlObj).end({ prettyPrint: true });
 
-            fs.unlinkSync(req.file.path); // delete file
+            fs.unlinkSync(req.file.path); // delete original file
 
-            // Send XML as normal response
             return res.status(200).json({
                 success: true,
                 xml: xmlContent
             });
 
         } catch (error) {
-            return res.status(500).json({
-                success: false,
-                message: error.message,
-            });
+            next(error);
         }
     }
 
