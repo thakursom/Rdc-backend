@@ -1,35 +1,33 @@
 # Enable Rewrite Engine
 RewriteEngine On
 
-# --- ALLOW DIRECT ACCESS TO UPLOADS ---
-# If URL starts with /Rdc-backend/uploads -> send to Node (not Apache)
+# -----------------------------
+# 1. Proxy Uploads to Node
+# -----------------------------
 RewriteCond %{REQUEST_URI} ^/Rdc-backend/uploads/ [NC]
-RewriteRule ^uploads/(.*)$ http://127.0.0.1:3000/uploads/$1 [P,L]
+RewriteRule ^Rdc-backend/uploads/(.*)$ http://127.0.0.1:3000/uploads/$1 [P,L]
 
-# --- EXISTING API PROXY ---
-# Proxy all /api/ requests to Node
-RewriteRule ^api/(.*)$ http://127.0.0.1:3000/api/$1 [P,L]
+# -----------------------------
+# 2. Proxy API requests to Node
+# -----------------------------
+RewriteCond %{REQUEST_URI} ^/Rdc-backend/api/ [NC]
+RewriteRule ^Rdc-backend/api/(.*)$ http://127.0.0.1:3000/api/$1 [P,L]
 
-# Forward HTTPS info to Node
+# -----------------------------
+# 3. Forward HTTPS headers
+# -----------------------------
 RequestHeader set X-Forwarded-Proto "https"
 RequestHeader set X-Forwarded-Port "443"
-RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
+RequestHeader set X-Forwarded-Host "%{HTTP_HOST}e"
 
-# Disable caching for API endpoints
+# -----------------------------
+# 4. Disable cache for API
+# -----------------------------
 <IfModule mod_headers.c>
-    <FilesMatch "^api/">
+    <Location "/Rdc-backend/api/">
         Header always set Cache-Control "no-store, no-cache, must-revalidate, max-age=0, private"
         Header always set Pragma "no-cache"
         Header always set Expires "0"
-    </FilesMatch>
+    </Location>
 </IfModule>
 
-# Disable mod_cache (if enabled) for API endpoints
-<IfModule mod_cache.c>
-    CacheDisable /api/
-</IfModule>
-
-# Prevent proxies from caching API responses
-<IfModule mod_proxy.c>
-    Header always set Vary "Authorization,Accept-Encoding"
-</IfModule>
