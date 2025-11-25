@@ -34,6 +34,12 @@ class contractController {
                 });
             }
 
+            // Only relative path
+            const relativePath = `uploads/contracts/${req.file.filename}`;
+
+            // Use BASE_URL from env ALWAYS
+            const fileURL = `${process.env.BASE_URL}/${relativePath}`;
+
             const newContract = await Contract.create({
                 user_id: label,
                 contractName,
@@ -41,7 +47,7 @@ class contractController {
                 startDate,
                 endDate,
                 labelPercentage: labelPercentage || 0,
-                pdf: req.file.filename,
+                pdf: fileURL,
             });
 
             await ContractLog.create({
@@ -103,6 +109,12 @@ class contractController {
                 });
             }
 
+            // Only relative path
+            const relativePath = `uploads/contracts/${req.file.filename}`;
+
+            // Use BASE_URL from env ALWAYS
+            const fileURL = `${process.env.BASE_URL}/${relativePath}`;
+
             // Delete old PDF if new uploaded
             let pdfFile = existingContract.pdf;
             if (req.file) {
@@ -114,7 +126,7 @@ class contractController {
                 if (fs.existsSync(oldFilePath)) {
                     fs.unlinkSync(oldFilePath);
                 }
-                pdfFile = req.file.filename;
+                pdfFile = fileURL;
             }
 
             // Update contract
