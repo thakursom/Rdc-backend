@@ -14,8 +14,16 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json()); // Parse JSON
 app.use(express.urlencoded({ extended: true })); // Parse form data
-app.use("/uploads/revenues", express.static(path.join(__dirname, "src/uploads/revenues")));
-app.use("/uploads/contracts", express.static(path.join(__dirname, "uploads/contracts")));
+app.use(
+    "/uploads/revenues",
+    express.static(path.join(__dirname, "src/uploads/revenues"))
+);
+
+// Serve contracts folder
+app.use(
+    "/uploads/contracts",
+    express.static(path.join(__dirname, "src/uploads/contracts"))
+);
 
 // Routes
 app.get("/", (req, res) => {
