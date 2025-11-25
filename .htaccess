@@ -10,7 +10,7 @@ RewriteRule ^uploads/(.*)$ http://127.0.0.1:3000/uploads/$1 [P,L]
 RewriteCond %{REQUEST_URI} ^/Rdc-backend/api/ [NC]
 RewriteRule ^api/(.*)$ http://127.0.0.1:3000/api/$1 [P,L]
 
-# Forward HTTPS info to Node
+# Forward HTTPS info to NodeJs
 RequestHeader set X-Forwarded-Proto "https"
 RequestHeader set X-Forwarded-Port "443"
 RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
