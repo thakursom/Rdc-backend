@@ -1,0 +1,33 @@
+# Enable Rewrite Engine
+RewriteEngine On
+RewriteBase /Rdc-backend/
+
+# --- ALLOW DIRECT ACCESS TO UPLOADS ---
+RewriteCond %{REQUEST_URI} ^/Rdc-backend/uploads/ [NC]
+RewriteRule ^uploads/(.*)$ http://127.0.0.1:3000/uploads/$1 [P,L]
+
+# --- PROXY API REQUESTS ---
+RewriteCond %{REQUEST_URI} ^/Rdc-backend/api/ [NC]
+RewriteRule ^api/(.*)$ http://127.0.0.1:3000/api/$1 [P,L]
+
+# Forward HTTPS info to NodeJs
+RequestHeader set X-Forwarded-Proto "https"
+RequestHeader set X-Forwarded-Port "443"
+RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
+
+# --- DISABLE CACHING FOR API (Correct cPanel compatible method) ---
+<IfModule mod_headers.c>
+    Header always set Cache-Control "no-store, no-cache, must-revalidate, private"
+    Header always set Pragma "no-cache"
+    Header always set Expires "0"
+</IfModule>
+
+# Disable Apache cache (safe)
+<IfModule mod_cache.c>
+    CacheDisable /
+</IfModule>
+
+# Prevent proxies from caching
+<IfModule mod_proxy.c>
+    Header always set Vary "Authorization,Accept-Encoding"
+</IfModule>
