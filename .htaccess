@@ -1,33 +1,42 @@
+# -------------------------------------------------
 # Enable Rewrite Engine
+# -------------------------------------------------
 RewriteEngine On
+RewriteBase /Rdc-backend/
 
-# -----------------------------
-# 1. Proxy Uploads to Node
-# -----------------------------
+# -------------------------------------------------
+# 1. Serve Uploads Directly (No Proxy)
+# -------------------------------------------------
 RewriteCond %{REQUEST_URI} ^/Rdc-backend/uploads/ [NC]
-RewriteRule ^Rdc-backend/uploads/(.*)$ http://127.0.0.1:3000/uploads/$1 [P,L]
+RewriteRule ^ - [L]
 
-# -----------------------------
-# 2. Proxy API requests to Node
-# -----------------------------
+# -------------------------------------------------
+# 2. Proxy API to Node Server
+# -------------------------------------------------
 RewriteCond %{REQUEST_URI} ^/Rdc-backend/api/ [NC]
-RewriteRule ^Rdc-backend/api/(.*)$ http://127.0.0.1:3000/api/$1 [P,L]
+RewriteRule ^api/(.*)$ http://127.0.0.1:3000/api/$1 [P,L]
 
-# -----------------------------
-# 3. Forward HTTPS headers
-# -----------------------------
+# -------------------------------------------------
+# 3. Forward HTTPS Headers
+# -------------------------------------------------
 RequestHeader set X-Forwarded-Proto "https"
 RequestHeader set X-Forwarded-Port "443"
-RequestHeader set X-Forwarded-Host "%{HTTP_HOST}e"
+RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
 
-# -----------------------------
-# 4. Disable cache for API
-# -----------------------------
+# -------------------------------------------------
+# 4. Disable Caching Only For API
+# -------------------------------------------------
 <IfModule mod_headers.c>
-    <Location "/Rdc-backend/api/">
-        Header always set Cache-Control "no-store, no-cache, must-revalidate, max-age=0, private"
-        Header always set Pragma "no-cache"
-        Header always set Expires "0"
-    </Location>
+    Header always set Cache-Control "no-store, no-cache, must-revalidate, max-age=0, private" "expr=%{REQUEST_URI} =~ m#^/Rdc-backend/api/#"
+    Header always set Pragma "no-cache" "expr=%{REQUEST_URI} =~ m#^/Rdc-backend/api/#"
+    Header always set Expires "0" "expr=%{REQUEST_URI} =~ m#^/Rdc-backend/api/#"
 </IfModule>
+
+# -------------------------------------------------
+# Lift Proxy Restrictions
+# -------------------------------------------------
+<IfModule mod_proxy.c>
+    ProxyRequests Off
+</IfModule>
+
 
