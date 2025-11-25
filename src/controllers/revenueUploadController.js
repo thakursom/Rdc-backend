@@ -27,13 +27,12 @@ class revenueUploadController {
                 return res.status(400).json({ error: "No file uploaded" });
             }
 
-            // Extract only relative path: uploads/contracts/FILE_NAME
+            // Only relative path
             const relativePath = `uploads/revenues/${req.file.filename}`;
 
-            // Create public URL
-            const fileURL = `${req.protocol}://${req.get("host")}/${relativePath}`;
+            // Use BASE_URL from env ALWAYS
+            const fileURL = `${process.env.BASE_URL}/${relativePath}`;
 
-            // Store upload record
             const RevenueUploads = await RevenueUpload.create({
                 user_id: userId,
                 platform,
@@ -44,7 +43,7 @@ class revenueUploadController {
                 fileExt: req.file.mimetype,
             });
 
-            // ---- Excel Parsing ----
+            // Excel Parsing
             const workbook = XLSX.readFile(req.file.path);
             const sheet = workbook.Sheets[workbook.SheetNames[0]];
             const jsonData = XLSX.utils.sheet_to_json(sheet);
@@ -75,7 +74,8 @@ class revenueUploadController {
             return res.json({
                 success: true,
                 message: "File uploaded and processed successfully",
-                uploadId: RevenueUploads._id
+                uploadId: RevenueUploads._id,
+                fileURL: fileURL
             });
 
         } catch (error) {
@@ -83,6 +83,7 @@ class revenueUploadController {
             res.status(500).json({ error: error.message });
         }
     }
+
 
 
     //getAllRevenueUploads method
