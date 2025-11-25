@@ -9,6 +9,13 @@ const bankController = require("../controllers/bankController");
 const upload = require("../middlewares/upload");
 const contractController = require("../controllers/contractController");
 const conversionController = require("../controllers/conversionController");
+const revenueController = require("../controllers/revenueUploadController");
+
+
+
+
+
+
 //Auth Apis
 router.post("/login", authController.login);
 router.post("/forgot-password", authController.forgotPassword);
@@ -56,8 +63,12 @@ router.get("/fetchLabelAndSubLabelContract", authMiddleware, contractController.
 
 
 //Xlsx Apis
-router.post("/convert-xlsx-xml", upload.single("file"), conversionController.convertXlsxToXml
-);
+router.post("/convert-xlsx-xml", upload.single("file"), conversionController.convertXlsxToXml);
+
+
+router.post("/upload-revenue", authMiddleware, upload.single("file"), revenueController.uploadRevenue);
+router.get("/fetchAllRevenueUploads", authMiddleware, revenueController.getAllRevenueUploads);
+
 
 
 
