@@ -1,22 +1,29 @@
-# Enable rewrite engine
+# Enable Rewrite Engine
 RewriteEngine On
 
-# Set base if your app is under a subfolder
-RewriteBase /Rdc-backend/
+# Proxy all /api/ requests to Node
+RewriteRule ^api/(.*)$ http://127.0.0.1:3000/api/$1 [P,L]
 
-# Serve existing files and directories directly
-RewriteCond %{REQUEST_FILENAME} -f [OR]
-RewriteCond %{REQUEST_FILENAME} -d
-RewriteRule ^ - [L]
-
-# Proxy everything else to Node.js app
-RewriteRule ^(.*)$ http://127.0.0.1:3000/$1 [P,L]
-
-# Reverse proxy support
-# ProxyPass /Rdc-backend/ http://127.0.0.1:3000/
-# ProxyPassReverse /Rdc-backend/ http://127.0.0.1:3000/
-
-# Optional: fix headers for Node.js app
+# Forward HTTPS info to Node
 RequestHeader set X-Forwarded-Proto "https"
 RequestHeader set X-Forwarded-Port "443"
 RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
+
+# Disable caching for API endpoints
+<IfModule mod_headers.c>
+    <FilesMatch "^api/">
+        Header always set Cache-Control "no-store, no-cache, must-revalidate, max-age=0, private"
+        Header always set Pragma "no-cache"
+        Header always set Expires "0"
+    </FilesMatch>
+</IfModule>
+
+# Disable mod_cache (if enabled) for API endpoints
+<IfModule mod_cache.c>
+    CacheDisable /api/
+</IfModule>
+
+# Optional: For extra safety, prevent proxies from caching
+<IfModule mod_proxy.c>
+    Header always set Vary "Authorization,Accept-Encoding"
+</IfModule>
