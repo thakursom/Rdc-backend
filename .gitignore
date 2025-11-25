@@ -134,4 +134,4 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
-src/uploads/revenues/
+src/uploads/revenues
