@@ -1,42 +1,35 @@
-# -------------------------------------------------
 # Enable Rewrite Engine
-# -------------------------------------------------
 RewriteEngine On
-RewriteBase /Rdc-backend/
 
-# -------------------------------------------------
-# 1. Serve Uploads Directly (No Proxy)
-# -------------------------------------------------
+# --- ALLOW DIRECT ACCESS TO UPLOADS ---
+# If URL starts with /Rdc-backend/uploads -> send to Node (not Apache)
 RewriteCond %{REQUEST_URI} ^/Rdc-backend/uploads/ [NC]
-RewriteRule ^ - [L]
+RewriteRule ^uploads/(.*)$ http://127.0.0.1:3000/uploads/$1 [P,L]
 
-# -------------------------------------------------
-# 2. Proxy API to Node Server
-# -------------------------------------------------
-RewriteCond %{REQUEST_URI} ^/Rdc-backend/api/ [NC]
+# --- EXISTING API PROXY ---
+# Proxy all /api/ requests to Node
 RewriteRule ^api/(.*)$ http://127.0.0.1:3000/api/$1 [P,L]
 
-# -------------------------------------------------
-# 3. Forward HTTPS Headers
-# -------------------------------------------------
+# Forward HTTPS info to Node
 RequestHeader set X-Forwarded-Proto "https"
 RequestHeader set X-Forwarded-Port "443"
 RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
 
-# -------------------------------------------------
-# 4. Disable Caching Only For API
-# -------------------------------------------------
+# Disable caching for API endpoints
 <IfModule mod_headers.c>
-    Header always set Cache-Control "no-store, no-cache, must-revalidate, max-age=0, private" "expr=%{REQUEST_URI} =~ m#^/Rdc-backend/api/#"
-    Header always set Pragma "no-cache" "expr=%{REQUEST_URI} =~ m#^/Rdc-backend/api/#"
-    Header always set Expires "0" "expr=%{REQUEST_URI} =~ m#^/Rdc-backend/api/#"
+    <FilesMatch "^api/">
+        Header always set Cache-Control "no-store, no-cache, must-revalidate, max-age=0, private"
+        Header always set Pragma "no-cache"
+        Header always set Expires "0"
+    </FilesMatch>
 </IfModule>
 
-# -------------------------------------------------
-# Lift Proxy Restrictions
-# -------------------------------------------------
+# Disable mod_cache (if enabled) for API endpoints
+<IfModule mod_cache.c>
+    CacheDisable /api/
+</IfModule>
+
+# Prevent proxies from caching API responses
 <IfModule mod_proxy.c>
-    ProxyRequests Off
+    Header always set Vary "Authorization,Accept-Encoding"
 </IfModule>
-
-
