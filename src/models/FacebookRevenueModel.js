@@ -43,6 +43,9 @@ const FacebookRevenueSchema = new mongoose.Schema(
         repeated_event_count: {
             type: Number
         },
+        event_count_1: {
+            type: Number
+        },
         "Total Revenue": {
             type: Number
         },

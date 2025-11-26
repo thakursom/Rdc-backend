@@ -65,9 +65,10 @@ router.get("/fetchLabelAndSubLabelContract", authMiddleware, contractController.
 //Xlsx Apis
 router.post("/convert-xlsx-xml", upload.single("file"), conversionController.convertXlsxToXml);
 
-
+//Revenue Apis
 router.post("/upload-revenue", authMiddleware, upload.single("file"), revenueController.uploadRevenue);
 router.get("/fetchAllRevenueUploads", authMiddleware, revenueController.getAllRevenueUploads);
+router.get('/getRevenueById', authMiddleware, revenueController.getRevenueById);
 
 
 
