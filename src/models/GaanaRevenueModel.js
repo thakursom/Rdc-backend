@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const GaanaRevenueSchema = new mongoose.Schema({
+const gaanaRevenueSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -97,4 +97,4 @@ const GaanaRevenueSchema = new mongoose.Schema({
         versionKey: false
     });
 
-module.exports = mongoose.model("GaanaRevenue", GaanaRevenueSchema);
+module.exports = mongoose.model("GaanaRevenue", gaanaRevenueSchema);

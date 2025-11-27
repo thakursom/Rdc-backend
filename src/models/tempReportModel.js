@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const TempReportSchema = new mongoose.Schema({
+const tempReportSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -97,4 +97,4 @@ const TempReportSchema = new mongoose.Schema({
         versionKey: false
     });
 
-module.exports = mongoose.model("TempReport", TempReportSchema);
+module.exports = mongoose.model("TempReport", tempReportSchema);

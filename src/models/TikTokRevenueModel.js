@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const TikTokRevenueSchema = new mongoose.Schema({
+const tikTokRevenueSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -97,4 +97,4 @@ const TikTokRevenueSchema = new mongoose.Schema({
         versionKey: false
     });
 
-module.exports = mongoose.model("TikTokRevenue", TikTokRevenueSchema);
+module.exports = mongoose.model("TikTokRevenue", tikTokRevenueSchema);

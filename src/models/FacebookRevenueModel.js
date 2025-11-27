@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const FacebookRevenueSchema = new mongoose.Schema({
+const facebookRevenueSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -97,4 +97,4 @@ const FacebookRevenueSchema = new mongoose.Schema({
         versionKey: false
     });
 
-module.exports = mongoose.model("FacebookRevenue", FacebookRevenueSchema);
+module.exports = mongoose.model("FacebookRevenue", facebookRevenueSchema);

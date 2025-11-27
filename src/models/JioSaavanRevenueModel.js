@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const JioSaavanRevenueSchema = new mongoose.Schema({
+const jioSaavanRevenueSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -97,4 +97,4 @@ const JioSaavanRevenueSchema = new mongoose.Schema({
         versionKey: false
     });
 
-module.exports = mongoose.model("JioSaavanRevenue", JioSaavanRevenueSchema);
+module.exports = mongoose.model("JioSaavanRevenue", jioSaavanRevenueSchema);
