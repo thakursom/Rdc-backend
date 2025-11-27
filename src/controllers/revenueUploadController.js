@@ -9,7 +9,7 @@ const FacebookRevenue = require("../models/FacebookRevenueModel");
 const AmazonRevenue = require("../models/AmazonRevenueModel");
 const TikTokRevenue = require("../models/TikTokRevenueModel");
 const TempReport = require("../models/tempReportModel");
-const TblReport2025 = require("../models/TblReport2025Model");
+const TblReport2025 = require("../models/tblReport2025Model");
 
 
 

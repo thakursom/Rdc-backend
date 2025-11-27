@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const tblReport2025Schema = new mongoose.Schema({
+const TblReport2025Schema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -97,4 +97,4 @@ const tblReport2025Schema = new mongoose.Schema({
         versionKey: false
     });
 
-module.exports = mongoose.model("TblReport_2025", tblReport2025Schema);
+module.exports = mongoose.model("TblReport_2025", TblReport2025Schema);
