@@ -1,14 +1,14 @@
 const XLSX = require("xlsx");
 
 const RevenueUpload = require("../models/revenueUploadModel");
-const AppleRevenue = require("../models/AppleRevenueModel");
-const SpotifyRevenue = require("../models/SpotifyRevenueModel");
-const GaanaRevenue = require("../models/GaanaRevenueModel");
-const JioSaavanRevenue = require("../models/JioSaavanRevenueModel");
-const FacebookRevenue = require("../models/FacebookRevenueModel");
-const AmazonRevenue = require("../models/AmazonRevenueModel");
-const TikTokRevenue = require("../models/TikTokRevenueModel");
-const TempReport = require("../models/TempReportModel");
+const AppleRevenue = require("../models/appleRevenueModel");
+const SpotifyRevenue = require("../models/spotifyRevenueModel");
+const GaanaRevenue = require("../models/gaanaRevenueModel");
+const JioSaavanRevenue = require("../models/jioSaavanRevenueModel");
+const FacebookRevenue = require("../models/facebookRevenueModel");
+const AmazonRevenue = require("../models/amazonRevenueModel");
+const TikTokRevenue = require("../models/tikTokRevenueModel");
+const TempReport = require("../models/tempReportModel");
 const TblReport2025 = require("../models/tblReport2025Model");
 
 
