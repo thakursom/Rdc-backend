@@ -1,6 +1,6 @@
 const XLSX = require("xlsx");
 
-const RevenueUpload = require("../models/revenueUploadModel");
+const RevenueUpload = require("../models/RevenueUploadModel");
 const AppleRevenue = require("../models/appleRevenueModel");
 const SpotifyRevenue = require("../models/spotifyRevenueModel");
 const GaanaRevenue = require("../models/gaanaRevenueModel");
