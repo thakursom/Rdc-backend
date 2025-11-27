@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const SpotifyRevenueSchema = new mongoose.Schema({
+const spotifyRevenueSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -97,4 +97,4 @@ const SpotifyRevenueSchema = new mongoose.Schema({
         versionKey: false
     });
 
-module.exports = mongoose.model("SpotifyRevenue", SpotifyRevenueSchema);
+module.exports = mongoose.model("SpotifyRevenue", spotifyRevenueSchema);

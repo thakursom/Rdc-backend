@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const AmazonRevenueSchema = new mongoose.Schema({
+const amazonRevenueSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -97,4 +97,4 @@ const AmazonRevenueSchema = new mongoose.Schema({
         versionKey: false
     });
 
-module.exports = mongoose.model("AmazonRevenue", AmazonRevenueSchema);
+module.exports = mongoose.model("AmazonRevenue", amazonRevenueSchema);

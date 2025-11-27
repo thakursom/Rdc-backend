@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const AppleRevenueSchema = new mongoose.Schema({
+const appleRevenueSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -97,4 +97,4 @@ const AppleRevenueSchema = new mongoose.Schema({
         versionKey: false
     });
 
-module.exports = mongoose.model("AppleRevenue", AppleRevenueSchema);
+module.exports = mongoose.model("AppleRevenue", appleRevenueSchema);
