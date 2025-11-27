@@ -8,7 +8,7 @@ const JioSaavanRevenue = require("../models/JioSaavanRevenueModel");
 const FacebookRevenue = require("../models/FacebookRevenueModel");
 const AmazonRevenue = require("../models/AmazonRevenueModel");
 const TikTokRevenue = require("../models/TikTokRevenueModel");
-const TempReport = require("../models/TempReportModel");
+const TempReport = require("../models/tempReportModel");
 const TblReport2025 = require("../models/TblReport2025Model");
 
 
