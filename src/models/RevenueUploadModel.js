@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const RevenueUploadSchema = new mongoose.Schema({
+const revenueUploadSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -37,4 +37,4 @@ const RevenueUploadSchema = new mongoose.Schema({
 }
 );
 
-module.exports = mongoose.model("RevenueUpload", RevenueUploadSchema);
+module.exports = mongoose.model("RevenueUpload", revenueUploadSchema);
