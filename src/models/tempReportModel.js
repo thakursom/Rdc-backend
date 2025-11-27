@@ -1,10 +1,15 @@
 const mongoose = require("mongoose");
 
-const tempReportSchema = new mongoose.Schema({
+const TempReportSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
         default: null
+    },
+    uploadId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "RevenueUpload",
+        required: true
     },
     retailer: {
         type: String,
@@ -88,8 +93,8 @@ const tempReportSchema = new mongoose.Schema({
     }
 },
     {
-        timestamps: false,
+        timestamps: true,
         versionKey: false
     });
 
-module.exports = mongoose.model("tempReport", tempReportSchema);
+module.exports = mongoose.model("TempReport", TempReportSchema);

@@ -1,8 +1,6 @@
-const path = require("path");
-const fs = require("fs");
-
 const XLSX = require("xlsx");
-const RevenueUpload = require("../models/RevenueUploadModel");
+
+const RevenueUpload = require("../models/revenueUploadModel");
 const AppleRevenue = require("../models/AppleRevenueModel");
 const SpotifyRevenue = require("../models/SpotifyRevenueModel");
 const GaanaRevenue = require("../models/GaanaRevenueModel");
@@ -10,7 +8,9 @@ const JioSaavanRevenue = require("../models/JioSaavanRevenueModel");
 const FacebookRevenue = require("../models/FacebookRevenueModel");
 const AmazonRevenue = require("../models/AmazonRevenueModel");
 const TikTokRevenue = require("../models/TikTokRevenueModel");
-const TempReport = require("../models/tempReportModel");
+const TempReport = require("../models/TempReportModel");
+const TblReport2025 = require("../models/tblReport2025Model");
+
 
 
 
@@ -50,28 +50,12 @@ class revenueUploadController {
                 return res.status(400).json({ error: "Excel file is empty" });
             }
 
-            const rows = jsonData.map(row => ({
-                uploadId: RevenueUploads._id,
-                ...row
-            }));
+            // const rows = jsonData.map(row => ({
+            //     uploadId: RevenueUploads._id,
+            //     ...row
+            // }));
 
-            // Insert platform-specific revenue table
-            const modelMap = {
-                Spotify: SpotifyRevenue,
-                AppleItunes: AppleRevenue,
-                Gaana: GaanaRevenue,
-                JioSaavan: JioSaavanRevenue,
-                Facebook: FacebookRevenue,
-                Amazon: AmazonRevenue,
-                TikTok: TikTokRevenue
-            };
-
-            if (modelMap[platform]) {
-                await modelMap[platform].insertMany(rows);
-            }
-
-
-            const mappedRows = rows.map(r => {
+            const mappedRows = jsonData.map(r => {
                 let obj = {};
 
                 // FACEBOOK MAPPING
@@ -240,12 +224,26 @@ class revenueUploadController {
                 obj.date = today;
                 obj.user_id = 0;
                 obj.uploading_date = today;
+                obj.uploadId = RevenueUploads._id;
 
                 return obj;
             });
 
-            // Delete all existing data from TempReport before inserting new data
-            await TempReport.deleteMany({});
+
+            // Insert platform-specific revenue table
+            const modelMap = {
+                Spotify: SpotifyRevenue,
+                AppleItunes: AppleRevenue,
+                Gaana: GaanaRevenue,
+                JioSaavan: JioSaavanRevenue,
+                Facebook: FacebookRevenue,
+                Amazon: AmazonRevenue,
+                TikTok: TikTokRevenue
+            };
+
+            if (modelMap[platform]) {
+                await modelMap[platform].insertMany(mappedRows);
+            }
 
             // Now insert the new mapped rows
             await TempReport.insertMany(mappedRows);
@@ -314,20 +312,20 @@ class revenueUploadController {
                 });
             }
 
-            const numericUserId = parseInt(userId);
+            // const numericUserId = parseInt(userId);
             const pageNum = parseInt(page);
             const limitNum = parseInt(limit);
             const skip = (pageNum - 1) * limitNum;
 
             const revenues = await TempReport.find({
-                user_id: numericUserId
+                uploadId: userId
             })
                 .sort({ uploading_date: -1 })
                 .skip(skip)
                 .limit(limitNum);
 
             const totalCount = await TempReport.countDocuments({
-                user_id: numericUserId
+                uploadId: userId
             });
 
             const totalPages = Math.ceil(totalCount / limitNum);
@@ -350,6 +348,64 @@ class revenueUploadController {
             return res.status(500).json({
                 success: false,
                 message: "Internal server error"
+            });
+        }
+    }
+
+    //uploadTblRevenue method
+    async uploadTblRevenue(req, res, next) {
+        try {
+            const { uploadId } = req.query;
+
+            if (!uploadId) {
+                return res.status(400).json({ success: false, message: "uploadId required" });
+            }
+
+            // Find and update the revenue upload
+            const revenueUpload = await RevenueUpload.findByIdAndUpdate(
+                uploadId,
+                { isAccepted: true },
+                { new: true }
+            );
+
+            if (!revenueUpload) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Revenue upload not found"
+                });
+            }
+
+            //Get all TempReport rows for this uploadId
+            const tempData = await TempReport.find({ uploadId }).lean();
+
+            if (!tempData.length) {
+                return res.status(404).json({ success: false, message: "No data found for this uploadId" });
+            }
+
+            // Remove MongoDB _id field so it can be inserted fresh
+            const cleanedData = tempData.map(row => {
+                const { _id, ...rest } = row;
+                return rest;
+            });
+
+            //Insert into TblReport2025 in bulk
+            await TblReport2025.insertMany(cleanedData);
+
+            // Delete all existing data from TempReport
+            await TempReport.deleteMany({ uploadId });
+
+            return res.status(200).json({
+                success: true,
+                message: "Data moved from TempReport to TblReport_2025 successfully",
+                insertedCount: cleanedData.length
+            });
+
+        } catch (error) {
+            console.error("uploadData error:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Something went wrong",
+                error: error.message
             });
         }
     }

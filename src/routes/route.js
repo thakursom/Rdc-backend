@@ -66,9 +66,10 @@ router.get("/fetchLabelAndSubLabelContract", authMiddleware, contractController.
 router.post("/convert-xlsx-xml", upload.single("file"), conversionController.convertXlsxToXml);
 
 //Revenue Apis
-router.post("/upload-revenue", authMiddleware, upload.single("file"), revenueController.uploadRevenue);
+router.post("/uploadRevenue", authMiddleware, upload.single("file"), revenueController.uploadRevenue);
 router.get("/fetchAllRevenueUploads", authMiddleware, revenueController.getAllRevenueUploads);
 router.get('/getRevenueById', authMiddleware, revenueController.getRevenueById);
+router.post("/uploadTblRevenue", authMiddleware, revenueController.uploadTblRevenue);
 
 
 

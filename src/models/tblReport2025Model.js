@@ -1,10 +1,15 @@
 const mongoose = require("mongoose");
 
-const tblReport2025Schema = new mongoose.Schema({
+const TblReport2025Schema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
         default: null
+    },
+    uploadId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "RevenueUpload",
+        required: true
     },
     retailer: {
         type: String,
@@ -88,8 +93,8 @@ const tblReport2025Schema = new mongoose.Schema({
     }
 },
     {
-        timestamps: false,
+        timestamps: true,
         versionKey: false
     });
 
-module.exports = mongoose.model("tblReport_2025", tblReport2025Schema);
+module.exports = mongoose.model("TblReport_2025", TblReport2025Schema);

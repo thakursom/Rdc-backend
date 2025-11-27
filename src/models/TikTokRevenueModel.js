@@ -1,74 +1,100 @@
 const mongoose = require("mongoose");
 
-const TikTokRevenueSchema = new mongoose.Schema(
-    {
-        uploadId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: "RevenueUpload",
-            required: true
-        },
-        Month: {
-            type: String
-        },
-        report_start_date: {
-            type: String
-        },
-        report_end_date: {
-            type: String
-        },
-        platform_name: {
-            type: String
-        },
-        Country: {
-            type: String
-        },
-        provider_dpid: {
-            type: String
-        },
-        platform_song_id: {
-            type: String
-        },
-        song_title: {
-            type: String
-        },
-        artist: {
-            type: String
-        },
-        album: {
-            type: String
-        },
-        label_name: {
-            type: String
-        },
-        label_id: {
-            type: String
-        },
-        isrc: {
-            type: String
-        },
-        product_code: {
-            type: String
-        },
-        video_views: {
-            type: Number
-        },
-        genre: {
-            type: String
-        },
-        content_type: {
-            type: String
-        },
-        inr_revenue: {
-            type: Number
-        },
-        sub_label_code: {
-            type: String
-        }
+const TikTokRevenueSchema = new mongoose.Schema({
+    user_id: {
+        type: Number,
+        ref: "User",
+        default: null
     },
+    uploadId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "RevenueUpload",
+        required: true
+    },
+    retailer: {
+        type: String,
+        default: null
+    },
+    label: {
+        type: String,
+        default: null
+    },
+    upc_code: {
+        type: String,
+        default: null
+    },
+    catalogue_number: {
+        type: String,
+        default: null
+    },
+    isrc_code: {
+        type: String,
+        default: null
+    },
+    release: {
+        type: String,
+        default: null
+    },
+    track_title: {
+        type: String,
+        default: null
+    },
+    track_artist: {
+        type: String,
+        default: null
+    },
+    remixer_name: {
+        type: String,
+        default: null
+    },
+    remix: {
+        type: String,
+        default: null
+    },
+    territory: {
+        type: String,
+        default: null
+    },
+    purchase_status: {
+        type: String,
+        default: null
+    },
+    format: {
+        type: String,
+        default: null
+    },
+    delivery: {
+        type: String,
+        default: null
+    },
+    content_type: {
+        type: String,
+        default: null
+    },
+    track_count: {
+        type: String,
+        default: null
+    },
+    sale_type: {
+        type: String,
+        default: null
+    },
+    net_total: {
+        type: String,
+        default: null
+    },
+    date: {
+        type: String,
+        default: null
+    },
+    uploading_date: {
+        type: String,
+        default: null
+    }
+},
     {
         timestamps: true,
         versionKey: false
-    }
-);
+    });
 
 module.exports = mongoose.model("TikTokRevenue", TikTokRevenueSchema);
