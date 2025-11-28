@@ -29,6 +29,16 @@ class AuthController {
                 });
             }
 
+            // 🔍 CHECK IF A RECORD ALREADY EXISTS FOR THIS USER
+            const existing = await BankDetail.findOne({ user_id });
+
+            if (existing) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Bank details already exist for this user"
+                });
+            }
+
             const newDetails = await BankDetail.create({
                 user_id,
                 paymentMethod,
