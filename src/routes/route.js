@@ -10,6 +10,7 @@ const upload = require("../middlewares/upload");
 const contractController = require("../controllers/contractController");
 const conversionController = require("../controllers/conversionController");
 const revenueController = require("../controllers/revenueUploadController");
+const payoutController = require("../controllers/payoutController");
 
 
 
@@ -47,6 +48,7 @@ router.put("/editBankDetails/:id", authMiddleware, bankController.editBankDetail
 router.get("/getBankDetailById", authMiddleware, bankController.getBankDetailById);
 router.delete("/deleteBankDetail/:id", authMiddleware, bankController.deleteBankDetail);
 router.get("/getBankDetailByUserId", authMiddleware, bankController.getBankDetailByUserId);
+router.get("/getBankDetailForPayout", authMiddleware, bankController.getBankDetailForPayout);
 
 
 //Contract Apis
@@ -72,6 +74,9 @@ router.get('/getRevenueById', authMiddleware, revenueController.getRevenueById);
 router.post("/uploadTblRevenue", authMiddleware, revenueController.uploadTblRevenue);
 
 
+//Payout Apis
+router.post("/createPayout", authMiddleware, payoutController.createPayout);
+router.get("/getAllPayouts", authMiddleware, payoutController.getAllPayouts);
 
 
 module.exports = router;

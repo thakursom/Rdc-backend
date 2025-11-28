@@ -55,6 +55,10 @@ const UserSchema = new mongoose.Schema({
         type: String,
         required: true,
     },
+    amount: {
+        type: Number,
+        default: 1010
+    },
     resetToken: {
         type: String,
         default: null

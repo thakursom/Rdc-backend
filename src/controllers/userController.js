@@ -170,7 +170,7 @@ class UserController {
             }
 
             const labels = await User.find(query)
-                .select("_id id name parent_id");
+                .select("_id id name parent_id amount");
 
             return ResponseService.success(res, "Label fetched successfully", { labels });
 

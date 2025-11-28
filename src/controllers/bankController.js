@@ -276,7 +276,7 @@ class AuthController {
         }
     }
 
-
+    // getBankDetailByUserId method
     async getBankDetailByUserId(req, res, next) {
         try {
             let { page = 1, limit = 10, search = "" } = req.query;
@@ -356,6 +356,35 @@ class AuthController {
         }
     }
 
+    //getBankDetailById method
+    async getBankDetailForPayout(req, res, next) {
+        try {
+            const { userId } = req.query;
+
+            if (!userId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "User ID is required"
+                });
+            }
+
+            // Use lean() to get plain JavaScript object directly
+            const bankDetail = await BankDetail.findOne({ user_id: userId }).lean();
+
+            if (!bankDetail) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Bank detail not found for this user"
+                });
+            }
+
+            return ResponseService.success(res, "Bank detail fetched successfully", { data: bankDetail });
+
+        } catch (error) {
+            console.error("Get Bank Detail Error:", error);
+            next(error);
+        }
+    }
 
 
 }
