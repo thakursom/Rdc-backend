@@ -1,6 +1,7 @@
 const User = require("../models/userModel");
 const BankDetail = require("../models/BankDetailModel");
 const ResponseService = require("../services/responseService");
+const LogService = require("../services/logService");
 
 class AuthController {
 
@@ -9,6 +10,8 @@ class AuthController {
     //addBankDetails method
     async addBankDetails(req, res, next) {
         try {
+            const { userId, email } = req.user;
+
             const {
                 user_id,
                 paymentMethod,
@@ -51,6 +54,16 @@ class AuthController {
                 paypalEmail,
                 upiId
             });
+
+            await LogService.createLog({
+                user_id: userId,
+                email,
+                action: "ADD_BANK_DETAILS",
+                description: "Bank details created",
+                newData: newDetails,
+                req
+            });
+
 
             return res.status(200).json({
                 success: true,
@@ -156,6 +169,7 @@ class AuthController {
     //editBankDetails method
     async editBankDetails(req, res, next) {
         try {
+            const { userId, email } = req.user;
             const { id } = req.params;
             const {
                 user_id,
@@ -184,6 +198,7 @@ class AuthController {
                 });
             }
 
+            const oldData = await BankDetail.findById(id).lean();
             const updatedDetail = await BankDetail.findByIdAndUpdate(
                 id,
                 {
@@ -207,6 +222,17 @@ class AuthController {
                     message: "Bank details not found"
                 });
             }
+
+            await LogService.createLog({
+                user_id: userId,
+                email,
+                action: "EDIT_BANK_DETAILS",
+                description: "Bank details updated",
+                oldData,
+                newData: updatedDetail,
+                req
+            });
+
 
             return res.status(200).json({
                 success: true,
@@ -258,6 +284,7 @@ class AuthController {
     //deleteBankDetail method
     async deleteBankDetail(req, res, next) {
         try {
+            const { userId, email } = req.user;
             const { id } = req.params;
 
             if (!id) {
@@ -266,7 +293,7 @@ class AuthController {
                     message: "Bank Detail ID is required"
                 });
             }
-
+            const oldData = await BankDetail.findById(id).lean();
             const deletedDetail = await BankDetail.findByIdAndDelete(id);
 
             if (!deletedDetail) {
@@ -275,6 +302,16 @@ class AuthController {
                     message: "Bank detail not found"
                 });
             }
+
+            await LogService.createLog({
+                user_id: userId,
+                email,
+                action: "DELETE_BANK_DETAILS",
+                description: "Bank detail deleted",
+                oldData,
+                req
+            });
+
 
             return res.status(200).json({
                 success: true,

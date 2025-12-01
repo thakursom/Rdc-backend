@@ -1,4 +1,5 @@
 const PaymentHistory = require("../models/paymentHistoryModel");
+const LogService = require("../services/logService");
 
 
 class payoutController {
@@ -8,6 +9,7 @@ class payoutController {
     // createPayout method
     async createPayout(req, res, next) {
         try {
+            const { userId, email } = req.user;
             const {
                 user_id,
                 paymentMethod,
@@ -34,6 +36,15 @@ class payoutController {
             };
 
             const newPayout = await PaymentHistory.create(payload);
+
+            await LogService.createLog({
+                user_id: userId,
+                email,
+                action: "ADD_PAYMENT_HISTORY_DETAILS",
+                description: "Payment History created successfully",
+                newData: newPayout,
+                req
+            });
 
             return res.status(200).json({
                 success: true,

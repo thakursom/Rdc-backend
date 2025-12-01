@@ -7,6 +7,7 @@ const ResponseService = require("../services/responseService");
 const sendEmail = require("../utils/sendEmail");
 const User = require("../models/userModel");
 const Artist = require("../models/artistModel");
+const LogService = require("../services/logService");
 
 class AuthController {
 
@@ -18,20 +19,50 @@ class AuthController {
             const { email, password } = req.body;
 
             const user = await User.findOne({ email });
-            if (!user) return ResponseService.error(res, "User not found", 404);
+            if (!user) {
+
+                await LogService.createLog({
+                    email,
+                    action: "LOGIN_FAILED",
+                    description: `Login failed: user not found (${email})`,
+                    req
+                });
+
+                return ResponseService.error(res, "User not found", 404);
+            }
 
             const match = await bcrypt.compare(password, user.password);
-            if (!match) return ResponseService.error(res, "Invalid password", 400);
+            if (!match) {
+
+                await LogService.createLog({
+                    user_id: user.id,
+                    email: user.email,
+                    action: "LOGIN_FAILED",
+                    description: `Login failed: invalid password (${email})`,
+                    req
+                });
+
+                return ResponseService.error(res, "Invalid password", 400);
+            }
 
             const token = jwt.sign(
                 {
-                    _id: user._id,      // Mongo ID
-                    userId: user.id,    // ✅ Auto-increment ID
+                    _id: user._id,
+                    userId: user.id,
+                    email: user.email,
                     role: user.role
                 },
                 process.env.JWT_SECRET,
                 { expiresIn: "1d" }
             );
+
+            await LogService.createLog({
+                user_id: user.id,
+                email: user.email,
+                action: "LOGIN_SUCCESS",
+                description: `${user.email} logged in successfully`,
+                req
+            });
 
             return ResponseService.success(res, "Login successful", {
                 token,
@@ -39,10 +70,18 @@ class AuthController {
                     name: user.name,
                     email: user.email,
                     role: user.role,
-                    userId: user.id     // ✅ send with response also
+                    userId: user.id
                 }
             });
+
         } catch (error) {
+            // await LogService.createLog({
+            //     email: req.body.email,
+            //     action: "LOGIN_ERROR",
+            //     description: "Unexpected login error",
+            //     req
+            // });
+
             return ResponseService.error(res, "Login failed", 500, error);
         }
     }
@@ -82,6 +121,15 @@ class AuthController {
                 `
             );
 
+            await LogService.createLog({
+                user_id: user.id,
+                email: user.email,
+                action: "FORGOT_PASSWORD",
+                description: `Password reset link sent to ${email}`,
+                req
+            });
+
+
             return ResponseService.success(res, "Reset link sent to email", {});
         } catch (error) {
             return ResponseService.error(res, "Failed to generate reset link", 500, error);
@@ -112,6 +160,15 @@ class AuthController {
 
             await user.save();
 
+            await LogService.createLog({
+                user_id: user.id,
+                email: user.email,
+                action: "RESET_PASSWORD",
+                description: `${user.email} reset password successfully`,
+                req
+            });
+
+
             return ResponseService.success(res, "Password updated successfully");
         } catch (error) {
             return ResponseService.error(res, "Password reset failed", 500, error);
@@ -137,6 +194,15 @@ class AuthController {
 
             user.password = hashedPassword;
             await user.save();
+
+            await LogService.createLog({
+                user_id: user.id,
+                email: user.email,
+                action: "CHANGE_PASSWORD",
+                description: `${user.email} changed password`,
+                req
+            });
+
 
             return ResponseService.success(res, "Password changed successfully");
         } catch (error) {

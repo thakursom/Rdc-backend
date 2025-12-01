@@ -1,6 +1,7 @@
 const bcrypt = require("bcryptjs");
 const User = require("../models/userModel");
 const ResponseService = require("../services/responseService");
+const LogService = require("../services/logService");
 
 class UserController {
 
@@ -100,27 +101,27 @@ class UserController {
     //addUser method
     async addUser(req, res, next) {
         try {
-            const { userId } = req.user;
+            const { userId, email } = req.user;
             let {
                 name,
-                email,
+                userEmail,
                 password,
                 role,
             } = req.body;
 
-            if (!name || !email || !password || !role) {
+            if (!name || !userEmail || !password || !role) {
                 return res.status(400).json({
                     success: false,
-                    message: "name, email, password & role are required"
+                    message: "name, userEmail, password & role are required"
                 });
             }
 
-            // ✅ Check existing email
-            const existingUser = await User.findOne({ email });
+            // ✅ Check existing userEmail
+            const existingUser = await User.findOne({ email: userEmail });
             if (existingUser) {
                 return res.status(400).json({
                     success: false,
-                    message: "Email already exists"
+                    message: "userEmail already exists"
                 });
             }
 
@@ -135,13 +136,22 @@ class UserController {
             const newUser = new User({
                 id: newId,
                 name,
-                email,
+                email: userEmail,
                 password: hashedPassword,
                 role,
                 parent_id: userId || null
             });
 
             await newUser.save();
+
+            await LogService.createLog({
+                user_id: userId,
+                email: email,
+                action: `ADDED_NEW_USER`,
+                description: "User added successfully",
+                newData: newUser,
+                req
+            });
 
             return res.status(200).json({
                 success: true,
@@ -150,6 +160,8 @@ class UserController {
             });
 
         } catch (error) {
+            console.log(error);
+
             return res.status(500).json({
                 success: false,
                 message: error.message

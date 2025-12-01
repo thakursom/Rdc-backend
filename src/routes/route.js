@@ -11,6 +11,7 @@ const contractController = require("../controllers/contractController");
 const conversionController = require("../controllers/conversionController");
 const revenueController = require("../controllers/revenueUploadController");
 const payoutController = require("../controllers/payoutController");
+const logController = require("../controllers/logController");
 
 
 
@@ -65,18 +66,24 @@ router.get("/fetchLabelAndSubLabelContract", authMiddleware, contractController.
 
 
 //Xlsx Apis
-router.post("/convert-xlsx-xml", upload.single("file"), conversionController.convertXlsxToXml);
+router.post("/convert-xlsx-xml", authMiddleware, upload.single("file"), conversionController.convertXlsxToXml);
 
 //Revenue Apis
 router.post("/uploadRevenue", authMiddleware, upload.single("file"), revenueController.uploadRevenue);
 router.get("/fetchAllRevenueUploads", authMiddleware, revenueController.getAllRevenueUploads);
 router.get('/getRevenueById', authMiddleware, revenueController.getRevenueById);
 router.post("/uploadTblRevenue", authMiddleware, revenueController.uploadTblRevenue);
+router.get('/revenueReports', authMiddleware, revenueController.getRevenueReport);
+router.get('/revenueReports/export/excel', authMiddleware, revenueController.downloadExcelReport);
+
 
 
 //Payout Apis
 router.post("/createPayout", authMiddleware, payoutController.createPayout);
 router.get("/getAllPayouts", authMiddleware, payoutController.getAllPayouts);
+
+//Log Apis
+router.get("/getAllLogs", authMiddleware, logController.getAllLogs);
 
 
 module.exports = router;
