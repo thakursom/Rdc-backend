@@ -25,6 +25,12 @@ app.use(
     express.static(path.join(__dirname, "src/uploads/contracts"))
 );
 
+// Serve labelSample folder
+app.use(
+    "/uploads/labelSample",
+    express.static(path.join(__dirname, "src/uploads/labelSample"))
+);
+
 // Routes
 app.get("/", (req, res) => {
     res.send("API is running...");

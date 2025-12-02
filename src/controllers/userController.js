@@ -1,3 +1,5 @@
+const XLSX = require("xlsx");
+
 const bcrypt = require("bcryptjs");
 const User = require("../models/userModel");
 const ResponseService = require("../services/responseService");
@@ -209,6 +211,76 @@ class UserController {
                 .select("_id id name parent_id");
 
             return ResponseService.success(res, "Labels fetched successfully", { labels });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    async uploadLabelAsUser(req, res, next) {
+        try {
+            const { userId, email } = req.user;
+
+            if (!req.file) {
+                return res.status(400).json({ error: "No file uploaded" });
+            }
+
+            // Read Excel
+            const workbook = XLSX.readFile(req.file.path);
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(sheet);
+
+            if (jsonData.length === 0) {
+                return res.status(400).json({ error: "Excel file is empty" });
+            }
+
+            // Get last used ID
+            const lastUser = await User.findOne().sort({ id: -1 });
+            let nextId = lastUser ? lastUser.id + 1 : 1;
+
+            const mappedUsers = [];
+
+            for (const r of jsonData) {
+                // Skip empty rows
+                if (!r.email && !r.name) continue;
+
+                mappedUsers.push({
+                    id: nextId++,
+                    third_party_id: r.third_party_id || null,
+                    third_party_sub_id: r.third_party_sub_id || null,
+                    third_party_username: r.third_party_username || null,
+                    access_token: r.access_token || null,
+                    parent_id: r.parent_id || null,
+                    name: r.name || null,
+                    email: r.email || null,
+                    phone: r.phone || null,
+                    country_id: r.country_id || null,
+                    email_verified_at: r.email_verified_at || null,
+                    password: r.password || null,
+                    remember_token: r.remember_token || null,
+                    role: r.role || null,
+                    amount: r.amount || null,
+                });
+            }
+
+            // Insert into User collection
+            await User.insertMany(mappedUsers);
+
+            // Log
+            await LogService.createLog({
+                user_id: userId,
+                email,
+                action: "ADD_BULK_LABEL",
+                description: "Label uploaded successfully from Excel",
+                newData: mappedUsers,
+                req
+            });
+
+            return res.json({
+                success: true,
+                message: "Label uploaded and processed successfully",
+                inserted: mappedUsers.length
+            });
 
         } catch (error) {
             next(error);

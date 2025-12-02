@@ -1,5 +1,6 @@
 const XLSX = require("xlsx");
 
+const LogService = require("../services/logService");
 const RevenueUpload = require("../models/RevenueUploadModel");
 const AppleRevenue = require("../models/AppleRevenueModel");
 const SpotifyRevenue = require("../models/SpotifyRevenueModel");
@@ -10,21 +11,19 @@ const AmazonRevenue = require("../models/AmazonRevenueModel");
 const TikTokRevenue = require("../models/TikTokRevenueModel");
 const TempReport = require("../models/tempReportModel");
 const TblReport2025 = require("../models/tblReport2025Model");
-const LogService = require("../services/logService");
-const ExcelJS = require('exceljs');
+const SoundRecordingRevenue = require("../models/soundRecordingRevenueModel");
+const YouTubeArtTrackRevenue = require("../models/youTubeArtTrackRevenueModel");
+const YouTubePartnerChannelRevenue = require("../models/youTubePartnerChannelRevenueModel");
+const YouTubeRDCChannelRevenue = require("../models/youTubeRDCChannelRevenueModel");
+const YouTubeVideoClaimRevenue = require("../models/youTubeVideoClaimRevenueModel");
+const YTPremiumRevenue = require("../models/ytPremiumRevenueModel");
 
 
 
 
 class revenueUploadController {
 
-    constructor() {
-        this.downloadJobs = new Map();
-        this.JOB_EXPIRY_TIME = 24 * 60 * 60 * 1000; // 24 hours
-
-        // Cleanup expired jobs every hour
-        setInterval(() => this.cleanupExpiredJobs(), 3600000);
-    }
+    constructor() { }
 
 
     //uploadRevenue method
@@ -185,24 +184,24 @@ class revenueUploadController {
                     //TikTok MAPPING
                 } else if (platform === "TikTok") {
                     obj = {
-                        retailer: r.platforn_name,
+                        retailer: r.Platforn_Name,
                         label: r["Label Name"] || null,
-                        upc_code: r.product_code,
+                        upc_code: r.Product_Code,
                         catalogue_number: null,
-                        isrc_code: r.isrc || null,
-                        release: r.album || null,
-                        track_title: r.song_title || null,
-                        track_artist: r.artist || null,
+                        isrc_code: r.Isrc || null,
+                        release: r.Album || null,
+                        track_title: r.Song_Title || null,
+                        track_artist: r.Artist || null,
                         remixer_name: null,
                         remix: null,
                         territory: r.Country || null,
                         purchase_status: null,
                         format: null,
                         delivery: "Streaming",
-                        content_type: r.content_type || null,
-                        track_count: r.video_views || null,
+                        content_type: null,
+                        track_count: r.Views || null,
                         sale_type: null,
-                        net_total: r["INR Revenue"] || null,
+                        net_total: r["Total Revenue"] || null,
                     };
 
                     //Gaana MAPPING
@@ -227,6 +226,132 @@ class revenueUploadController {
                         sale_type: null,
                         net_total: r["Total"] || null,
                     };
+                } else if (platform === "SoundRecording") {
+                    obj = {
+                        retailer: r["Channel Name"] || null,
+                        label: r["Label Name"] || null,
+                        upc_code: r.UPC,
+                        catalogue_number: null,
+                        isrc_code: r.ISRC || null,
+                        release: r.Album || null,
+                        track_title: r["Asset Title"] || null,
+                        track_artist: r.Artist || null,
+                        remixer_name: null,
+                        remix: null,
+                        territory: r.Country || null,
+                        purchase_status: null,
+                        format: null,
+                        delivery: "Streaming",
+                        content_type: null,
+                        track_count: r["Owned Views"] || null,
+                        sale_type: null,
+                        net_total: r["Total Revenue"] || null,
+                    };
+                } else if (platform === "YouTubeArtTrack") {
+                    obj = {
+                        retailer: r["Channel Name"] || null,
+                        label: r["Label Name"] || null,
+                        upc_code: r.UPC,
+                        catalogue_number: null,
+                        isrc_code: r.ISRC || null,
+                        release: r["Asset Title"] || null,
+                        track_title: r["Asset Title"] || null,
+                        track_artist: r.Artist || null,
+                        remixer_name: null,
+                        remix: null,
+                        territory: r.Country || null,
+                        purchase_status: null,
+                        format: null,
+                        delivery: "Streaming",
+                        content_type: r["Content Type"] || null,
+                        track_count: r["Owned Views"] || null,
+                        sale_type: null,
+                        net_total: r["Total Revenue"] || null,
+                    };
+                } else if (platform === "YouTubePartnerChannel") {
+                    obj = {
+                        retailer: r["Channel Display Name"] || null,
+                        label: r["Label Name"] || null,
+                        upc_code: null,
+                        catalogue_number: null,
+                        isrc_code: null,
+                        release: r["Asset Title"] || null,
+                        track_title: r["Asset Title"] || null,
+                        track_artist: r.Artist || null,
+                        remixer_name: null,
+                        remix: null,
+                        territory: r.Country || null,
+                        purchase_status: null,
+                        format: null,
+                        delivery: "Streaming",
+                        content_type: r["Content Type"] || null,
+                        track_count: r["Owned Views"] || null,
+                        sale_type: null,
+                        net_total: r["Total INR"] || null,
+                    };
+                } else if (platform === "YouTubeRDCChannel") {
+                    obj = {
+                        retailer: r["Channel Display Name"] || null,
+                        label: r["Label Name"] || null,
+                        upc_code: null,
+                        catalogue_number: null,
+                        isrc_code: null,
+                        release: r["Asset Title"] || null,
+                        track_title: r["Asset Title"] || null,
+                        track_artist: r.Artist || null,
+                        remixer_name: null,
+                        remix: null,
+                        territory: r.Country || null,
+                        purchase_status: null,
+                        format: null,
+                        delivery: "Streaming",
+                        content_type: r["Content Type"] || null,
+                        track_count: r["Owned Views"] || null,
+                        sale_type: null,
+                        net_total: r["Total INR"] || null,
+                    };
+                } else if (platform === "YouTubeVideoClaim") {
+                    obj = {
+                        retailer: r["Channel Display Name"] || null,
+                        label: r["Label Name"] || null,
+                        upc_code: null,
+                        catalogue_number: null,
+                        isrc_code: null,
+                        release: r["Asset Title"] || null,
+                        track_title: r["Asset Title"] || null,
+                        track_artist: r.Artist || null,
+                        remixer_name: null,
+                        remix: null,
+                        territory: r.Country || null,
+                        purchase_status: null,
+                        format: null,
+                        delivery: "Streaming",
+                        content_type: r["Content Type"] || null,
+                        track_count: r["Owned Views"] || null,
+                        sale_type: null,
+                        net_total: r["Total INR"] || null,
+                    };
+                } else if (platform === "YTPremiumRevenue") {
+                    obj = {
+                        retailer: r["Channel Display Name"] || null,
+                        label: r["Label Name"] || null,
+                        upc_code: null,
+                        catalogue_number: null,
+                        isrc_code: null,
+                        release: r["Asset Title"] || null,
+                        track_title: r["Asset Title"] || null,
+                        track_artist: r.Artist || null,
+                        remixer_name: null,
+                        remix: null,
+                        territory: r.Country || null,
+                        purchase_status: null,
+                        format: null,
+                        delivery: "Streaming",
+                        content_type: r["Content Type"] || null,
+                        track_count: r["Owned Views"] || null,
+                        sale_type: null,
+                        net_total: r["Total INR"] || null,
+                    };
                 }
 
                 const today = new Date().toISOString().split("T")[0];
@@ -247,7 +372,13 @@ class revenueUploadController {
                 JioSaavan: JioSaavanRevenue,
                 Facebook: FacebookRevenue,
                 Amazon: AmazonRevenue,
-                TikTok: TikTokRevenue
+                TikTok: TikTokRevenue,
+                SoundRecording: SoundRecordingRevenue,
+                YouTubeArtTrack: YouTubeArtTrackRevenue,
+                YouTubePartnerChannel: YouTubePartnerChannelRevenue,
+                YouTubeRDCChannel: YouTubeRDCChannelRevenue,
+                YouTubeVideoClaim: YouTubeVideoClaimRevenue,
+                YTPremiumRevenue: YTPremiumRevenue
             };
 
             if (modelMap[platform]) {
@@ -416,9 +547,9 @@ class revenueUploadController {
             await LogService.createLog({
                 user_id: userId,
                 email,
-                action: `REVENUE_ADDED_IN_TBLREPORT_FOR_${tempData.retailer}`,
-                description: `${tempData.retailer} revenue uploaded successfully in tbl_report`,
-                newData: mappedRows,
+                action: `REVENUE_ADDED_IN_TBLREPORT_FOR_${tempData[0].retailer}`,
+                description: `${tempData[0].retailer} revenue uploaded successfully in tbl_report`,
+                newData: cleanedData,
                 req
             });
 
@@ -461,24 +592,22 @@ class revenueUploadController {
 
             const userId = req.user.id;
 
-            // Build filter object - start with user filter
-            const filter = { user: userId }; // Assuming reports belong to specific user
+            // -------- BUILD FILTER --------
+            const filter = { user: userId };
 
-            // Platform filter
             if (platform && platform !== '') {
                 filter.retailer = platform;
             }
 
-            // Month filter - handle both string and number
+            // Month filter
             if (month && month !== '') {
                 const year = new Date().getFullYear();
-                const monthStr = String(month).padStart(2, '0');
                 const startDate = new Date(year, parseInt(month) - 1, 1);
                 const endDate = new Date(year, parseInt(month), 0);
 
                 filter.date = {
-                    $gte: startDate.toISOString().split('T')[0], // Format as YYYY-MM-DD
-                    $lte: endDate.toISOString().split('T')[0]
+                    $gte: startDate.toISOString().split("T")[0],
+                    $lte: endDate.toISOString().split("T")[0]
                 };
             }
 
@@ -494,35 +623,51 @@ class revenueUploadController {
                 if (quarterMonths[quarter]) {
                     const year = new Date().getFullYear();
                     const months = quarterMonths[quarter];
+
                     const start = new Date(year, months[0] - 1, 1);
-                    const end = new Date(year, months[2], 0); // Last day of last month in quarter
+                    const end = new Date(year, months[2], 0);
 
                     filter.date = {
-                        $gte: start.toISOString().split('T')[0],
-                        $lte: end.toISOString().split('T')[0]
+                        $gte: start.toISOString().split("T")[0],
+                        $lte: end.toISOString().split("T")[0]
                     };
                 }
             }
 
             // Checkbox filters
-            if (artist === 'true') {
-                filter.track_artist = { $exists: true, $ne: '' };
-            }
-
-            if (territory === 'true') {
-                filter.territory = { $exists: true, $ne: '' };
-            }
-
-            // Add other checkbox filters as needed
-            if (releases === 'true') {
-                filter.release = { $exists: true, $ne: '' };
-            }
+            if (artist === "true") filter.track_artist = { $exists: true, $ne: "" };
+            if (territory === "true") filter.territory = { $exists: true, $ne: "" };
+            if (releases === "true") filter.release = { $exists: true, $ne: "" };
 
             console.log("Filter Object:", JSON.stringify(filter, null, 2));
 
-            // Main aggregation pipeline
+            // -------- MAIN PIPELINE --------
             const pipeline = [
                 { $match: filter },
+
+                // SAFE type conversion for calculations
+                {
+                    $addFields: {
+                        safeStreams: {
+                            $convert: {
+                                input: "$track_count",
+                                to: "int",
+                                onError: 0,
+                                onNull: 0
+                            }
+                        },
+                        safeRevenue: {
+                            $convert: {
+                                input: "$net_total",
+                                to: "double",
+                                onError: 0,
+                                onNull: 0
+                            }
+                        }
+                    }
+                },
+
+                // Grouping logic
                 {
                     $group: {
                         _id: {
@@ -531,26 +676,12 @@ class revenueUploadController {
                             artist: "$track_artist",
                             release: "$release"
                         },
-                        totalStreams: {
-                            $sum: {
-                                $cond: [
-                                    { $eq: [{ $type: "$track_count" }, "string"] },
-                                    { $toInt: "$track_count" },
-                                    { $ifNull: ["$track_count", 0] }
-                                ]
-                            }
-                        },
-                        totalRevenue: {
-                            $sum: {
-                                $cond: [
-                                    { $eq: [{ $type: "$net_total" }, "string"] },
-                                    { $toDouble: "$net_total" },
-                                    { $ifNull: ["$net_total", 0] }
-                                ]
-                            }
-                        }
+                        totalStreams: { $sum: "$safeStreams" },
+                        totalRevenue: { $sum: "$safeRevenue" }
                     }
                 },
+
+                // Sorting
                 {
                     $sort: {
                         "_id.date": sortOrder === 'desc' ? -1 : 1,
@@ -560,43 +691,47 @@ class revenueUploadController {
                 }
             ];
 
-            // Get total count before pagination
-            const countPipeline = [...pipeline];
-            countPipeline.push({ $count: "totalRecords" });
+            // Count documents BEFORE pagination
+            const countPipeline = [...pipeline, { $count: "totalRecords" }];
 
-            // Add pagination to main pipeline
+            // Pagination
             const skip = (parseInt(page) - 1) * parseInt(limit);
             pipeline.push({ $skip: skip });
             pipeline.push({ $limit: parseInt(limit) });
 
-            // Get summary statistics
+            // -------- SUMMARY PIPELINE --------
             const summaryPipeline = [
                 { $match: filter },
                 {
-                    $group: {
-                        _id: null,
-                        totalStreams: {
-                            $sum: {
-                                $cond: [
-                                    { $eq: [{ $type: "$track_count" }, "string"] },
-                                    { $toInt: "$track_count" },
-                                    { $ifNull: ["$track_count", 0] }
-                                ]
+                    $addFields: {
+                        safeStreams: {
+                            $convert: {
+                                input: "$track_count",
+                                to: "int",
+                                onError: 0,
+                                onNull: 0
                             }
                         },
-                        totalRevenue: {
-                            $sum: {
-                                $cond: [
-                                    { $eq: [{ $type: "$net_total" }, "string"] },
-                                    { $toDouble: "$net_total" },
-                                    { $ifNull: ["$net_total", 0] }
-                                ]
+                        safeRevenue: {
+                            $convert: {
+                                input: "$net_total",
+                                to: "double",
+                                onError: 0,
+                                onNull: 0
                             }
                         }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        totalStreams: { $sum: "$safeStreams" },
+                        totalRevenue: { $sum: "$safeRevenue" }
                     }
                 }
             ];
 
+            // Execute all simultaneously
             const [data, countResult, summary] = await Promise.all([
                 TblReport2025.aggregate(pipeline),
                 TblReport2025.aggregate(countPipeline),
@@ -606,29 +741,26 @@ class revenueUploadController {
             const totalRecords = countResult[0]?.totalRecords || 0;
             const totalPages = Math.ceil(totalRecords / parseInt(limit));
 
-            const summaryData = summary[0] || {
-                totalStreams: 0,
-                totalRevenue: 0
-            };
+            const summaryData = summary[0] || { totalStreams: 0, totalRevenue: 0 };
 
+            // -------- RESPONSE --------
             res.json({
                 success: true,
                 data: {
                     summary: {
                         totalStreams: summaryData.totalStreams,
-                        totalRevenue: parseFloat(summaryData.totalRevenue.toFixed(2)),
-                        platforms: [], // You can add this if needed
-                        artists: [],   // You can add this if needed
-                        releases: []   // You can add this if needed
+                        totalRevenue: Number(summaryData.totalRevenue.toFixed(2)),
                     },
+
                     reports: data.map(item => ({
                         date: item._id.date,
-                        platform: item._id.retailer || 'Unknown',
-                        artist: item._id.artist || 'Unknown',
-                        release: item._id.release || 'Unknown',
+                        platform: item._id.retailer || "Unknown",
+                        artist: item._id.artist || "Unknown",
+                        release: item._id.release || "Unknown",
                         streams: item.totalStreams,
-                        revenue: parseFloat(item.totalRevenue.toFixed(2))
+                        revenue: Number(item.totalRevenue.toFixed(2))
                     })),
+
                     pagination: {
                         totalRecords,
                         totalPages,

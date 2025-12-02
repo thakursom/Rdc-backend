@@ -31,6 +31,7 @@ router.get("/fetchSubLabel", authMiddleware, userController.fetchSubLabel);
 router.get("/fetchAllLabel", authMiddleware, userController.fetchAllLabels);
 router.get("/fetchAllSubLabel", authMiddleware, userController.fetchAllSubLabel);
 router.post("/add-user", authMiddleware, userController.addUser);
+router.post("/uploadLabelAsUser", authMiddleware, upload.single("file"), userController.uploadLabelAsUser);
 
 //Artist Apis
 router.get("/fetchAllArtist", authMiddleware, artistController.getAllArtists);
