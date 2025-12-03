@@ -2,12 +2,6 @@
 RewriteEngine On
 RewriteBase /Rdc-backend/
 
-
-# --- ADD THESE LINES (REAL CLIENT IP FORWARDING)
-ProxyPreserveHost On
-RequestHeader set X-Real-IP %{REMOTE_ADDR}s
-RequestHeader add X-Forwarded-For %{REMOTE_ADDR}s
-
 # --- ALLOW DIRECT ACCESS TO UPLOADS ---
 RewriteCond %{REQUEST_URI} ^/Rdc-backend/uploads/ [NC]
 RewriteRule ^uploads/(.*)$ http://127.0.0.1:3000/uploads/$1 [P,L]
