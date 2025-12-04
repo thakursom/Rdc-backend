@@ -569,13 +569,15 @@ class revenueUploadController {
         }
     }
 
-    // getRevenueReport method
-    async getRevenueReport(req, res, next) {
+    // getAudioStreamingRevenueReport method
+    async getAudioStreamingRevenueReport(req, res, next) {
         try {
             const {
                 platform,
                 month,
                 quarter,
+                fromDate,
+                toDate,
                 releases,
                 artist,
                 track,
@@ -586,17 +588,29 @@ class revenueUploadController {
                 quarters,
                 page = 1,
                 limit = 10,
-                sortBy = 'date',
-                sortOrder = 'desc'
             } = req.query;
 
             const userId = req.user.id;
 
+            const defaultRetailers = [
+                "Apple Music",
+                "Spotify",
+                "Gaana",
+                "Jio Saavn",
+                "Facebook",
+                "Amazon",
+                "TikTok"
+            ];
+
             // -------- BUILD FILTER --------
             const filter = { user: userId };
 
-            if (platform && platform !== '') {
-                filter.retailer = platform;
+            // if (platform && platform !== '') filter.retailer = platform;
+            if (platform && platform !== "") {
+                const platforms = platform.split(",").map(p => p.trim());
+                filter.retailer = { $in: platforms };
+            } else {
+                filter.retailer = { $in: defaultRetailers };
             }
 
             // Month filter
@@ -604,7 +618,6 @@ class revenueUploadController {
                 const year = new Date().getFullYear();
                 const startDate = new Date(year, parseInt(month) - 1, 1);
                 const endDate = new Date(year, parseInt(month), 0);
-
                 filter.date = {
                     $gte: startDate.toISOString().split("T")[0],
                     $lte: endDate.toISOString().split("T")[0]
@@ -613,20 +626,12 @@ class revenueUploadController {
 
             // Quarter filter
             if (quarter && quarter !== '') {
-                const quarterMonths = {
-                    '1': [1, 2, 3],
-                    '2': [4, 5, 6],
-                    '3': [7, 8, 9],
-                    '4': [10, 11, 12]
-                };
-
+                const quarterMonths = { '1': [1, 2, 3], '2': [4, 5, 6], '3': [7, 8, 9], '4': [10, 11, 12] };
                 if (quarterMonths[quarter]) {
                     const year = new Date().getFullYear();
                     const months = quarterMonths[quarter];
-
                     const start = new Date(year, months[0] - 1, 1);
                     const end = new Date(year, months[2], 0);
-
                     filter.date = {
                         $gte: start.toISOString().split("T")[0],
                         $lte: end.toISOString().split("T")[0]
@@ -634,40 +639,34 @@ class revenueUploadController {
                 }
             }
 
+            // Custom date range
+            if (fromDate && toDate) {
+                filter.date = { $gte: fromDate, $lte: toDate };
+            }
+
             // Checkbox filters
             if (artist === "true") filter.track_artist = { $exists: true, $ne: "" };
             if (territory === "true") filter.territory = { $exists: true, $ne: "" };
             if (releases === "true") filter.release = { $exists: true, $ne: "" };
 
-            console.log("Filter Object:", JSON.stringify(filter, null, 2));
-
-            // -------- MAIN PIPELINE --------
-            const pipeline = [
-                { $match: filter },
-
-                // SAFE type conversion for calculations
-                {
-                    $addFields: {
-                        safeStreams: {
-                            $convert: {
-                                input: "$track_count",
-                                to: "int",
-                                onError: 0,
-                                onNull: 0
-                            }
-                        },
-                        safeRevenue: {
-                            $convert: {
-                                input: "$net_total",
-                                to: "double",
-                                onError: 0,
-                                onNull: 0
-                            }
+            // Convert net_total safely
+            const addSafeRevenue = {
+                $addFields: {
+                    safeRevenue: {
+                        $convert: {
+                            input: "$net_total",
+                            to: "double",
+                            onError: 0,
+                            onNull: 0
                         }
                     }
-                },
+                }
+            };
 
-                // Grouping logic
+            // 1. Table + Summary (existing)
+            const tablePipeline = [
+                { $match: filter },
+                addSafeRevenue,
                 {
                     $group: {
                         _id: {
@@ -676,88 +675,151 @@ class revenueUploadController {
                             artist: "$track_artist",
                             release: "$release"
                         },
-                        totalStreams: { $sum: "$safeStreams" },
                         totalRevenue: { $sum: "$safeRevenue" }
                     }
                 },
-
-                // Sorting
-                {
-                    $sort: {
-                        "_id.date": sortOrder === 'desc' ? -1 : 1,
-                        "_id.retailer": 1,
-                        "totalRevenue": -1
-                    }
-                }
+                // { $sort: { "_id.date": -1 }
             ];
 
-            // Count documents BEFORE pagination
-            const countPipeline = [...pipeline, { $count: "totalRecords" }];
+            const countPipeline = [...tablePipeline, { $count: "total" }];
+            const paginatedPipeline = [
+                ...tablePipeline,
+                { $skip: (parseInt(page) - 1) * parseInt(limit) },
+                { $limit: parseInt(limit) }
+            ];
 
-            // Pagination
-            const skip = (parseInt(page) - 1) * parseInt(limit);
-            pipeline.push({ $skip: skip });
-            pipeline.push({ $limit: parseInt(limit) });
-
-            // -------- SUMMARY PIPELINE --------
             const summaryPipeline = [
                 { $match: filter },
-                {
-                    $addFields: {
-                        safeStreams: {
-                            $convert: {
-                                input: "$track_count",
-                                to: "int",
-                                onError: 0,
-                                onNull: 0
-                            }
-                        },
-                        safeRevenue: {
-                            $convert: {
-                                input: "$net_total",
-                                to: "double",
-                                onError: 0,
-                                onNull: 0
-                            }
-                        }
-                    }
-                },
+                addSafeRevenue,
                 {
                     $group: {
                         _id: null,
-                        totalStreams: { $sum: "$safeStreams" },
+                        totalStreams: {
+                            $sum: {
+                                $convert: { input: "$track_count", to: "int", onError: 0, onNull: 0 }
+                            }
+                        },
                         totalRevenue: { $sum: "$safeRevenue" }
                     }
                 }
             ];
 
-            // Execute all simultaneously
-            const [data, countResult, summary] = await Promise.all([
-                TblReport2025.aggregate(pipeline),
+            // 2. Revenue By Month (for stacked bar chart)
+            const revenueByMonthPipeline = [
+                { $match: filter },
+                addSafeRevenue,
+                {
+                    $group: {
+                        _id: {
+                            year: { $year: { $dateFromString: { dateString: "$date" } } },
+                            month: { $month: { $dateFromString: { dateString: "$date" } } }
+                        },
+                        revenue: { $sum: "$safeRevenue" }
+                    }
+                },
+                {
+                    $project: {
+                        monthLabel: {
+                            $dateToString: {
+                                format: "%b %Y",
+                                date: {
+                                    $dateFromParts: {
+                                        year: "$_id.year",
+                                        month: "$_id.month",
+                                        day: 1
+                                    }
+                                }
+                            }
+                        },
+                        revenue: { $round: ["$revenue", 2] }
+                    }
+                },
+                { $sort: { monthLabel: 1 } }
+            ];
+
+            // 3. Revenue By Channel (retailer)
+            const revenueByChannelPipeline = [
+                { $match: filter },
+                addSafeRevenue,
+                {
+                    $group: {
+                        _id: "$retailer",
+                        revenue: { $sum: "$safeRevenue" }
+                    }
+                },
+                {
+                    $project: {
+                        platform: "$_id",
+                        revenue: { $round: ["$revenue", 2] },
+                        _id: 0
+                    }
+                },
+                { $sort: { revenue: -1 } }
+            ];
+
+            // 4. Revenue By Country
+            const revenueByCountryPipeline = [
+                { $match: filter },
+                addSafeRevenue,
+                {
+                    $group: {
+                        _id: "$territory",
+                        revenue: { $sum: "$safeRevenue" }
+                    }
+                },
+                {
+                    $project: {
+                        country: "$_id",
+                        revenue: { $round: ["$revenue", 2] },
+                        _id: 0
+                    }
+                },
+                { $sort: { revenue: -1 } },
+                { $limit: 10 } // Top 10 countries
+            ];
+
+            // Execute ALL in parallel
+            const [
+                paginatedData,
+                countResult,
+                summaryResult,
+                byMonthResult,
+                byChannelResult,
+                byCountryResult
+            ] = await Promise.all([
+                TblReport2025.aggregate(paginatedPipeline),
                 TblReport2025.aggregate(countPipeline),
-                TblReport2025.aggregate(summaryPipeline)
+                TblReport2025.aggregate(summaryPipeline),
+                TblReport2025.aggregate(revenueByMonthPipeline),
+                TblReport2025.aggregate(revenueByChannelPipeline),
+                TblReport2025.aggregate(revenueByCountryPipeline)
             ]);
 
-            const totalRecords = countResult[0]?.totalRecords || 0;
+            const totalRecords = countResult[0]?.total || 0;
             const totalPages = Math.ceil(totalRecords / parseInt(limit));
 
-            const summaryData = summary[0] || { totalStreams: 0, totalRevenue: 0 };
+            const summary = summaryResult[0] || { totalStreams: 0, totalRevenue: 0 };
+            const revenueByChannel = {};
+            defaultRetailers.forEach(platform => {
+                const found = byChannelResult.find(item => item.platform === platform);
+                revenueByChannel[platform] = found ? found.revenue : 0;
+            });
 
-            // -------- RESPONSE --------
+
+            // Format response
             res.json({
                 success: true,
                 data: {
                     summary: {
-                        totalStreams: summaryData.totalStreams,
-                        totalRevenue: Number(summaryData.totalRevenue.toFixed(2)),
+                        totalStreams: summary.totalStreams,
+                        totalRevenue: Number(summary.totalRevenue.toFixed(2))
                     },
 
-                    reports: data.map(item => ({
+                    reports: paginatedData.map(item => ({
                         date: item._id.date,
                         platform: item._id.retailer || "Unknown",
                         artist: item._id.artist || "Unknown",
                         release: item._id.release || "Unknown",
-                        streams: item.totalStreams,
                         revenue: Number(item.totalRevenue.toFixed(2))
                     })),
 
@@ -766,7 +828,297 @@ class revenueUploadController {
                         totalPages,
                         currentPage: parseInt(page),
                         limit: parseInt(limit)
+                    },
+
+                    // CHART DATA
+                    revenueByMonth: Object.fromEntries(
+                        byMonthResult.map(item => [item.monthLabel, item.revenue])
+                    ),
+
+                    revenueByChannel,
+
+                    revenueByCountry: Object.fromEntries(
+                        byCountryResult.map(item => [item.country || "Unknown", item.revenue])
+                    )
+                }
+            });
+
+        } catch (error) {
+            console.error("Error in getRevenueReport:", error);
+            next(error);
+        }
+    }
+
+    // getYoutubeRevenueReport method
+    async getYoutubeRevenueReport(req, res, next) {
+        try {
+            const {
+                platform,
+                month,
+                quarter,
+                fromDate,
+                toDate,
+                releases,
+                artist,
+                track,
+                partner,
+                contentType,
+                format,
+                territory,
+                quarters,
+                page = 1,
+                limit = 10,
+            } = req.query;
+
+            const userId = req.user.id;
+
+            const defaultRetailers = [
+                "Sound Recording (Audio Claim)",
+                "Art Track (YouTube Music)",
+                "YouTubePartnerChannel",
+                "YouTubeRDCChannel",
+                "YouTubeVideoClaim",
+                "YTPremiumRevenue",
+            ];
+
+            // -------- BUILD FILTER --------
+            const filter = { user: userId };
+
+            // if (platform && platform !== '') filter.retailer = platform;
+            if (platform && platform !== "") {
+                const platforms = platform.split(",").map(p => p.trim());
+                filter.retailer = { $in: platforms };
+            } else {
+                filter.retailer = { $in: defaultRetailers };
+            }
+
+            // Month filter
+            if (month && month !== '') {
+                const year = new Date().getFullYear();
+                const startDate = new Date(year, parseInt(month) - 1, 1);
+                const endDate = new Date(year, parseInt(month), 0);
+                filter.date = {
+                    $gte: startDate.toISOString().split("T")[0],
+                    $lte: endDate.toISOString().split("T")[0]
+                };
+            }
+
+            // Quarter filter
+            if (quarter && quarter !== '') {
+                const quarterMonths = { '1': [1, 2, 3], '2': [4, 5, 6], '3': [7, 8, 9], '4': [10, 11, 12] };
+                if (quarterMonths[quarter]) {
+                    const year = new Date().getFullYear();
+                    const months = quarterMonths[quarter];
+                    const start = new Date(year, months[0] - 1, 1);
+                    const end = new Date(year, months[2], 0);
+                    filter.date = {
+                        $gte: start.toISOString().split("T")[0],
+                        $lte: end.toISOString().split("T")[0]
+                    };
+                }
+            }
+
+            // Custom date range
+            if (fromDate && toDate) {
+                filter.date = { $gte: fromDate, $lte: toDate };
+            }
+
+            // Checkbox filters
+            if (artist === "true") filter.track_artist = { $exists: true, $ne: "" };
+            if (territory === "true") filter.territory = { $exists: true, $ne: "" };
+            if (releases === "true") filter.release = { $exists: true, $ne: "" };
+
+            // Convert net_total safely
+            const addSafeRevenue = {
+                $addFields: {
+                    safeRevenue: {
+                        $convert: {
+                            input: "$net_total",
+                            to: "double",
+                            onError: 0,
+                            onNull: 0
+                        }
                     }
+                }
+            };
+
+            // 1. Table + Summary (existing)
+            const tablePipeline = [
+                { $match: filter },
+                addSafeRevenue,
+                {
+                    $group: {
+                        _id: {
+                            date: "$date",
+                            retailer: "$retailer",
+                            artist: "$track_artist",
+                            release: "$release"
+                        },
+                        totalRevenue: { $sum: "$safeRevenue" }
+                    }
+                },
+                // { $sort: { "_id.date": -1 }
+            ];
+
+            const countPipeline = [...tablePipeline, { $count: "total" }];
+            const paginatedPipeline = [
+                ...tablePipeline,
+                { $skip: (parseInt(page) - 1) * parseInt(limit) },
+                { $limit: parseInt(limit) }
+            ];
+
+            const summaryPipeline = [
+                { $match: filter },
+                addSafeRevenue,
+                {
+                    $group: {
+                        _id: null,
+                        totalStreams: {
+                            $sum: {
+                                $convert: { input: "$track_count", to: "int", onError: 0, onNull: 0 }
+                            }
+                        },
+                        totalRevenue: { $sum: "$safeRevenue" }
+                    }
+                }
+            ];
+
+            // 2. Revenue By Month (for stacked bar chart)
+            const revenueByMonthPipeline = [
+                { $match: filter },
+                addSafeRevenue,
+                {
+                    $group: {
+                        _id: {
+                            year: { $year: { $dateFromString: { dateString: "$date" } } },
+                            month: { $month: { $dateFromString: { dateString: "$date" } } }
+                        },
+                        revenue: { $sum: "$safeRevenue" }
+                    }
+                },
+                {
+                    $project: {
+                        monthLabel: {
+                            $dateToString: {
+                                format: "%b %Y",
+                                date: {
+                                    $dateFromParts: {
+                                        year: "$_id.year",
+                                        month: "$_id.month",
+                                        day: 1
+                                    }
+                                }
+                            }
+                        },
+                        revenue: { $round: ["$revenue", 2] }
+                    }
+                },
+                { $sort: { monthLabel: 1 } }
+            ];
+
+            // 3. Revenue By Channel (retailer)
+            const revenueByChannelPipeline = [
+                { $match: filter },
+                addSafeRevenue,
+                {
+                    $group: {
+                        _id: "$retailer",
+                        revenue: { $sum: "$safeRevenue" }
+                    }
+                },
+                {
+                    $project: {
+                        platform: "$_id",
+                        revenue: { $round: ["$revenue", 2] },
+                        _id: 0
+                    }
+                },
+                { $sort: { revenue: -1 } }
+            ];
+
+            // 4. Revenue By Country
+            const revenueByCountryPipeline = [
+                { $match: filter },
+                addSafeRevenue,
+                {
+                    $group: {
+                        _id: "$territory",
+                        revenue: { $sum: "$safeRevenue" }
+                    }
+                },
+                {
+                    $project: {
+                        country: "$_id",
+                        revenue: { $round: ["$revenue", 2] },
+                        _id: 0
+                    }
+                },
+                { $sort: { revenue: -1 } },
+                { $limit: 10 } // Top 10 countries
+            ];
+
+            // Execute ALL in parallel
+            const [
+                paginatedData,
+                countResult,
+                summaryResult,
+                byMonthResult,
+                byChannelResult,
+                byCountryResult
+            ] = await Promise.all([
+                TblReport2025.aggregate(paginatedPipeline),
+                TblReport2025.aggregate(countPipeline),
+                TblReport2025.aggregate(summaryPipeline),
+                TblReport2025.aggregate(revenueByMonthPipeline),
+                TblReport2025.aggregate(revenueByChannelPipeline),
+                TblReport2025.aggregate(revenueByCountryPipeline)
+            ]);
+
+            const totalRecords = countResult[0]?.total || 0;
+            const totalPages = Math.ceil(totalRecords / parseInt(limit));
+
+            const summary = summaryResult[0] || { totalStreams: 0, totalRevenue: 0 };
+            const revenueByChannel = {};
+            defaultRetailers.forEach(platform => {
+                const found = byChannelResult.find(item => item.platform === platform);
+                revenueByChannel[platform] = found ? found.revenue : 0;
+            });
+
+
+            // Format response
+            res.json({
+                success: true,
+                data: {
+                    summary: {
+                        totalStreams: summary.totalStreams,
+                        totalRevenue: Number(summary.totalRevenue.toFixed(2))
+                    },
+
+                    reports: paginatedData.map(item => ({
+                        date: item._id.date,
+                        platform: item._id.retailer || "Unknown",
+                        artist: item._id.artist || "Unknown",
+                        release: item._id.release || "Unknown",
+                        revenue: Number(item.totalRevenue.toFixed(2))
+                    })),
+
+                    pagination: {
+                        totalRecords,
+                        totalPages,
+                        currentPage: parseInt(page),
+                        limit: parseInt(limit)
+                    },
+
+                    // CHART DATA
+                    revenueByMonth: Object.fromEntries(
+                        byMonthResult.map(item => [item.monthLabel, item.revenue])
+                    ),
+
+                    revenueByChannel,
+
+                    revenueByCountry: Object.fromEntries(
+                        byCountryResult.map(item => [item.country || "Unknown", item.revenue])
+                    )
                 }
             });
 
