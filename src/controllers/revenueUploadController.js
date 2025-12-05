@@ -1129,14 +1129,14 @@ class revenueUploadController {
     }
 
     // downloadExcelReport method
-    async downloadExcelReport(req, res, next) {
+    async downloadAudioStreamingExcelReport(req, res, next) {
         try {
-            console.log('=== Starting Excel Export ===');
-
             const {
                 platform,
                 month,
                 quarter,
+                fromDate,
+                toDate,
                 releases,
                 artist,
                 track,
@@ -1147,14 +1147,24 @@ class revenueUploadController {
                 quarters
             } = req.query;
 
-            const userId = req.user.id;
 
-            // Build filter object
-            const filter = { user: userId };
+            const defaultRetailers = [
+                "Apple Music",
+                "Spotify",
+                "Gaana",
+                "Jio Saavn",
+                "Facebook",
+                "Amazon",
+                "TikTok"
+            ];
 
-            // Platform filter
-            if (platform && platform !== '') {
-                filter.retailer = platform;
+            const filter = {};
+
+            if (platform && platform !== "") {
+                const platforms = platform.split(",").map(p => p.trim());
+                filter.retailer = { $in: platforms };
+            } else {
+                filter.retailer = { $in: defaultRetailers };
             }
 
             // Month filter
@@ -1191,6 +1201,11 @@ class revenueUploadController {
                 }
             }
 
+            // Custom date range
+            if (fromDate && toDate) {
+                filter.date = { $gte: fromDate, $lte: toDate };
+            }
+
             // Checkbox filters
             if (artist === 'true') {
                 filter.track_artist = { $exists: true, $ne: '' };
@@ -1208,7 +1223,8 @@ class revenueUploadController {
 
             // Get data WITHOUT aggregation for simplicity
             const data = await TblReport2025.find(filter)
-                .select('date retailer track_artist release track_count net_total')
+                // .select('date retailer track_artist release track_count net_total')
+                .select('-__v')
                 .sort({ date: -1 })
                 .lean();
 
@@ -1222,61 +1238,201 @@ class revenueUploadController {
                 });
             }
 
-            // **FIX: Format data CORRECTLY**
             const excelData = [];
+            const rows = data.map(d => ({ ...d }));
+            const excludeFields = ["_id", "date", "createdAt", "updatedAt"];
 
-            // Add headers
-            const headers = ['S.No', 'Date', 'Platform', 'Artist', 'Release', 'Streams', 'Revenue'];
+            const dataKeys = Object.keys(rows[0]).filter(
+                key => !excludeFields.includes(key)
+            );
+
+            const headers = ["S.No", ...dataKeys];
             excelData.push(headers);
 
-            // Add data rows
-            data.forEach((item, index) => {
-                // Format date properly
-                let formattedDate = 'N/A';
-                if (item.date) {
-                    try {
-                        const date = new Date(item.date);
-                        if (!isNaN(date.getTime())) {
-                            formattedDate = date.toLocaleDateString('en-GB');
-                        }
-                    } catch (e) {
-                        formattedDate = item.date;
-                    }
-                }
-
-                // Convert numbers
-                const streams = Number(item.track_count) || 0;
-                const revenue = parseFloat(item.net_total || 0);
-
+            rows.forEach((row, index) => {
                 excelData.push([
                     index + 1,
-                    formattedDate,
-                    item.retailer || 'N/A',
-                    item.track_artist || 'N/A',
-                    item.release || 'N/A',
-                    streams,
-                    revenue.toFixed(2) // Keep 2 decimal places for currency
+                    ...dataKeys.map(key => row[key])
                 ]);
             });
 
-            // **FIX: Create workbook properly**
             const workbook = XLSX.utils.book_new();
-
-            // Use `aoa_to_sheet` (Array of Arrays) instead of `json_to_sheet`
             const worksheet = XLSX.utils.aoa_to_sheet(excelData);
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Revenue Report");
 
-            // Set column widths
-            worksheet['!cols'] = [
-                { wch: 8 },   // S.No
-                { wch: 12 },  // Date
-                { wch: 20 },  // Platform
-                { wch: 25 },  // Artist
-                { wch: 30 },  // Release
-                { wch: 12 },  // Streams
-                { wch: 15 }   // Revenue
+            // Generate filename - SIMPLIFY it
+            const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
+            const filename = `Revenue_Report_${timestamp}.xlsx`;
+
+            console.log(`Creating Excel file: ${filename}`);
+
+            // **FIX: Write to buffer with proper options**
+            const excelBuffer = XLSX.write(workbook, {
+                type: 'buffer',
+                bookType: 'xlsx',
+                bookSST: false
+            });
+
+            console.log(`Excel buffer size: ${excelBuffer.length} bytes`);
+
+            // **FIX: Set headers CORRECTLY**
+            res.writeHead(200, {
+                'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'Content-Disposition': `attachment; filename="${filename}"`,
+                'Content-Length': excelBuffer.length,
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            });
+
+            // **FIX: Send the buffer**
+            res.end(excelBuffer);
+            console.log('=== Excel file sent successfully ===');
+
+        } catch (error) {
+            console.error("Error in downloadExcelReport:", error);
+
+            // Send JSON error if headers not sent yet
+            if (!res.headersSent) {
+                res.status(500).json({
+                    success: false,
+                    message: "Error generating Excel file",
+                    error: error.message
+                });
+            }
+        }
+    }
+
+    // downloadYoutubeExcelReport method
+    async downloadYoutubeExcelReport(req, res, next) {
+
+        try {
+            const {
+                platform,
+                month,
+                quarter,
+                fromDate,
+                toDate,
+                releases,
+                artist,
+                track,
+                partner,
+                contentType,
+                format,
+                territory,
+                quarters
+            } = req.query;
+
+
+            const defaultRetailers = [
+                "Sound Recording (Audio Claim)",
+                "Art Track (YouTube Music)",
+                "YouTubePartnerChannel",
+                "YouTubeRDCChannel",
+                "YouTubeVideoClaim",
+                "YTPremiumRevenue",
             ];
 
-            // Add worksheet to workbook
+            const filter = {};
+
+            if (platform && platform !== "") {
+                const platforms = platform.split(",").map(p => p.trim());
+                filter.retailer = { $in: platforms };
+            } else {
+                filter.retailer = { $in: defaultRetailers };
+            }
+
+            // Month filter
+            if (month && month !== '') {
+                const year = new Date().getFullYear();
+                const startDate = new Date(year, parseInt(month) - 1, 1);
+                const endDate = new Date(year, parseInt(month), 0);
+
+                filter.date = {
+                    $gte: startDate.toISOString().split('T')[0],
+                    $lte: endDate.toISOString().split('T')[0]
+                };
+            }
+
+            // Quarter filter
+            if (quarter && quarter !== '') {
+                const quarterMonths = {
+                    '1': [1, 2, 3],
+                    '2': [4, 5, 6],
+                    '3': [7, 8, 9],
+                    '4': [10, 11, 12]
+                };
+
+                if (quarterMonths[quarter]) {
+                    const year = new Date().getFullYear();
+                    const months = quarterMonths[quarter];
+                    const start = new Date(year, months[0] - 1, 1);
+                    const end = new Date(year, months[2], 0);
+
+                    filter.date = {
+                        $gte: start.toISOString().split('T')[0],
+                        $lte: end.toISOString().split('T')[0]
+                    };
+                }
+            }
+
+            // Custom date range
+            if (fromDate && toDate) {
+                filter.date = { $gte: fromDate, $lte: toDate };
+            }
+
+            // Checkbox filters
+            if (artist === 'true') {
+                filter.track_artist = { $exists: true, $ne: '' };
+            }
+
+            if (territory === 'true') {
+                filter.territory = { $exists: true, $ne: '' };
+            }
+
+            if (releases === 'true') {
+                filter.release = { $exists: true, $ne: '' };
+            }
+
+            console.log('Export filter:', JSON.stringify(filter, null, 2));
+
+            // Get data WITHOUT aggregation for simplicity
+            const data = await TblReport2025.find(filter)
+                // .select('date retailer track_artist release track_count net_total')
+                .select('-__v')
+                .sort({ date: -1 })
+                .lean();
+
+            console.log(`Found ${data.length} records for export`);
+
+            if (data.length === 0) {
+                // Send a proper error response
+                return res.status(404).json({
+                    success: false,
+                    message: "No data found to export"
+                });
+            }
+
+            const excelData = [];
+            const rows = data.map(d => ({ ...d }));
+            const excludeFields = ["_id", "date", "createdAt", "updatedAt"];
+
+            const dataKeys = Object.keys(rows[0]).filter(
+                key => !excludeFields.includes(key)
+            );
+
+            const headers = ["S.No", ...dataKeys];
+            excelData.push(headers);
+
+            rows.forEach((row, index) => {
+                excelData.push([
+                    index + 1,
+                    ...dataKeys.map(key => row[key])
+                ]);
+            });
+
+            const workbook = XLSX.utils.book_new();
+            const worksheet = XLSX.utils.aoa_to_sheet(excelData);
             XLSX.utils.book_append_sheet(workbook, worksheet, "Revenue Report");
 
             // Generate filename - SIMPLIFY it

@@ -76,7 +76,8 @@ router.get('/getRevenueById', authMiddleware, revenueController.getRevenueById);
 router.post("/uploadTblRevenue", authMiddleware, revenueController.uploadTblRevenue);
 router.get('/audioStreamingRevenueReport', authMiddleware, revenueController.getAudioStreamingRevenueReport);
 router.get('/youtubeRevenueReport', authMiddleware, revenueController.getYoutubeRevenueReport);
-router.get('/revenueReports/export/excel', authMiddleware, revenueController.downloadExcelReport);
+router.get('/revenueReports/export/audioStreamingExcel', authMiddleware, revenueController.downloadAudioStreamingExcelReport);
+router.get('/revenueReports/export/youtubeExcel', authMiddleware, revenueController.downloadYoutubeExcelReport);
 
 
 
