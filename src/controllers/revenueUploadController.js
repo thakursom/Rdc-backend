@@ -645,9 +645,9 @@ class revenueUploadController {
             }
 
             // Checkbox filters
-            if (artist === "true") filter.track_artist = { $exists: true, $ne: "" };
-            if (territory === "true") filter.territory = { $exists: true, $ne: "" };
-            if (releases === "true") filter.release = { $exists: true, $ne: "" };
+            if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
+            if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
+            if (releases === "true") filter.release = { $nin: ["", null, undefined] };
 
             // Convert net_total safely
             const addSafeRevenue = {
@@ -924,9 +924,9 @@ class revenueUploadController {
             }
 
             // Checkbox filters
-            if (artist === "true") filter.track_artist = { $exists: true, $ne: "" };
-            if (territory === "true") filter.territory = { $exists: true, $ne: "" };
-            if (releases === "true") filter.release = { $exists: true, $ne: "" };
+            if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
+            if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
+            if (releases === "true") filter.release = { $nin: ["", null, undefined] };
 
             // Convert net_total safely
             const addSafeRevenue = {
@@ -1207,19 +1207,9 @@ class revenueUploadController {
             }
 
             // Checkbox filters
-            if (artist === 'true') {
-                filter.track_artist = { $exists: true, $ne: '' };
-            }
-
-            if (territory === 'true') {
-                filter.territory = { $exists: true, $ne: '' };
-            }
-
-            if (releases === 'true') {
-                filter.release = { $exists: true, $ne: '' };
-            }
-
-            console.log('Export filter:', JSON.stringify(filter, null, 2));
+            if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
+            if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
+            if (releases === "true") filter.release = { $nin: ["", null, undefined] };
 
             // Get data WITHOUT aggregation for simplicity
             const data = await TblReport2025.find(filter)
@@ -1382,19 +1372,9 @@ class revenueUploadController {
             }
 
             // Checkbox filters
-            if (artist === 'true') {
-                filter.track_artist = { $exists: true, $ne: '' };
-            }
-
-            if (territory === 'true') {
-                filter.territory = { $exists: true, $ne: '' };
-            }
-
-            if (releases === 'true') {
-                filter.release = { $exists: true, $ne: '' };
-            }
-
-            console.log('Export filter:', JSON.stringify(filter, null, 2));
+            if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
+            if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
+            if (releases === "true") filter.release = { $nin: ["", null, undefined] };
 
             // Get data WITHOUT aggregation for simplicity
             const data = await TblReport2025.find(filter)
