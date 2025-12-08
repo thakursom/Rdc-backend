@@ -23,7 +23,7 @@ class ArtistController {
             let query = {};
 
             // ✅ If NOT Super Admin → filter by userId
-            if (role !== "Super Admin") {
+            if (role !== "Super Admin" && role !== "Manager") {
                 query.created_by = userId;
                 console.log("labelll");
             }

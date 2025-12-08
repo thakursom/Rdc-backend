@@ -97,7 +97,7 @@ class AuthController {
                 : {};
 
             // 🔥 NEW LOGIC: If NOT Super Admin → find all child users
-            if (role !== "Super Admin") {
+            if (role !== "Super Admin" && role !== "Manager") {
                 // 1️⃣ Find users where parent_id = logged in user
                 const users = await User.find({ parent_id: userId }, { id: 1 });
 
