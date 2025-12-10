@@ -590,8 +590,6 @@ class revenueUploadController {
                 limit = 10,
             } = req.query;
 
-            const userId = req.user.id;
-
             const defaultRetailers = [
                 "Apple Music",
                 "Spotify",
@@ -603,9 +601,8 @@ class revenueUploadController {
             ];
 
             // -------- BUILD FILTER --------
-            const filter = { user: userId };
+            const filter = {};
 
-            // if (platform && platform !== '') filter.retailer = platform;
             if (platform && platform !== "") {
                 const platforms = platform.split(",").map(p => p.trim());
                 filter.retailer = { $in: platforms };
@@ -663,25 +660,43 @@ class revenueUploadController {
                 }
             };
 
-            // 1. Table + Summary (existing)
+            // Group by artist FIRST for consistent pagination
             const tablePipeline = [
                 { $match: filter },
                 addSafeRevenue,
                 {
                     $group: {
-                        _id: {
-                            date: "$date",
-                            retailer: "$retailer",
-                            artist: "$track_artist",
-                            release: "$release"
-                        },
-                        totalRevenue: { $sum: "$safeRevenue" }
+                        _id: "$track_artist",
+                        totalRevenue: { $sum: "$safeRevenue" },
+                        firstDate: { $first: "$date" },
+                        firstRetailer: { $first: "$retailer" },
+                        firstRelease: { $first: "$release" },
+                        artistName: { $first: "$track_artist" }
                     }
                 },
-                // { $sort: { "_id.date": -1 }
+                {
+                    $project: {
+                        _id: 0,
+                        date: "$firstDate",
+                        platform: "$firstRetailer",
+                        artist: "$artistName",
+                        release: "$firstRelease",
+                        revenue: { $round: ["$totalRevenue", 2] }
+                    }
+                },
+                { $sort: { revenue: -1 } } // Sort by revenue descending
             ];
 
-            const countPipeline = [...tablePipeline, { $count: "total" }];
+            const countPipeline = [
+                { $match: filter },
+                {
+                    $group: {
+                        _id: "$track_artist" // Count distinct artists
+                    }
+                },
+                { $count: "total" }
+            ];
+
             const paginatedPipeline = [
                 ...tablePipeline,
                 { $skip: (parseInt(page) - 1) * parseInt(limit) },
@@ -814,29 +829,17 @@ class revenueUploadController {
                         totalStreams: summary.totalStreams,
                         totalRevenue: Number(summary.totalRevenue.toFixed(2))
                     },
-
-                    reports: paginatedData.map(item => ({
-                        date: item._id.date,
-                        platform: item._id.retailer || "Unknown",
-                        artist: item._id.artist || "Unknown",
-                        release: item._id.release || "Unknown",
-                        revenue: Number(item.totalRevenue.toFixed(2))
-                    })),
-
+                    reports: paginatedData,
                     pagination: {
                         totalRecords,
                         totalPages,
                         currentPage: parseInt(page),
                         limit: parseInt(limit)
                     },
-
-                    // CHART DATA
                     revenueByMonth: Object.fromEntries(
                         byMonthResult.map(item => [item.monthLabel, item.revenue])
                     ),
-
                     revenueByChannel,
-
                     revenueByCountry: Object.fromEntries(
                         byCountryResult.map(item => [item.country || "Unknown", item.revenue])
                     )
@@ -870,8 +873,6 @@ class revenueUploadController {
                 limit = 10,
             } = req.query;
 
-            const userId = req.user.id;
-
             const defaultRetailers = [
                 "Sound Recording (Audio Claim)",
                 "Art Track (YouTube Music)",
@@ -882,9 +883,8 @@ class revenueUploadController {
             ];
 
             // -------- BUILD FILTER --------
-            const filter = { user: userId };
+            const filter = {};
 
-            // if (platform && platform !== '') filter.retailer = platform;
             if (platform && platform !== "") {
                 const platforms = platform.split(",").map(p => p.trim());
                 filter.retailer = { $in: platforms };
@@ -942,25 +942,43 @@ class revenueUploadController {
                 }
             };
 
-            // 1. Table + Summary (existing)
+            // Group by artist FIRST for consistent pagination
             const tablePipeline = [
                 { $match: filter },
                 addSafeRevenue,
                 {
                     $group: {
-                        _id: {
-                            date: "$date",
-                            retailer: "$retailer",
-                            artist: "$track_artist",
-                            release: "$release"
-                        },
-                        totalRevenue: { $sum: "$safeRevenue" }
+                        _id: "$track_artist",
+                        totalRevenue: { $sum: "$safeRevenue" },
+                        firstDate: { $first: "$date" },
+                        firstRetailer: { $first: "$retailer" },
+                        firstRelease: { $first: "$release" },
+                        artistName: { $first: "$track_artist" }
                     }
                 },
-                // { $sort: { "_id.date": -1 }
+                {
+                    $project: {
+                        _id: 0,
+                        date: "$firstDate",
+                        platform: "$firstRetailer",
+                        artist: "$artistName",
+                        release: "$firstRelease",
+                        revenue: { $round: ["$totalRevenue", 2] }
+                    }
+                },
+                { $sort: { revenue: -1 } } // Sort by revenue descending
             ];
 
-            const countPipeline = [...tablePipeline, { $count: "total" }];
+            const countPipeline = [
+                { $match: filter },
+                {
+                    $group: {
+                        _id: "$track_artist" // Count distinct artists
+                    }
+                },
+                { $count: "total" }
+            ];
+
             const paginatedPipeline = [
                 ...tablePipeline,
                 { $skip: (parseInt(page) - 1) * parseInt(limit) },
@@ -1093,29 +1111,17 @@ class revenueUploadController {
                         totalStreams: summary.totalStreams,
                         totalRevenue: Number(summary.totalRevenue.toFixed(2))
                     },
-
-                    reports: paginatedData.map(item => ({
-                        date: item._id.date,
-                        platform: item._id.retailer || "Unknown",
-                        artist: item._id.artist || "Unknown",
-                        release: item._id.release || "Unknown",
-                        revenue: Number(item.totalRevenue.toFixed(2))
-                    })),
-
+                    reports: paginatedData,
                     pagination: {
                         totalRecords,
                         totalPages,
                         currentPage: parseInt(page),
                         limit: parseInt(limit)
                     },
-
-                    // CHART DATA
                     revenueByMonth: Object.fromEntries(
                         byMonthResult.map(item => [item.monthLabel, item.revenue])
                     ),
-
                     revenueByChannel,
-
                     revenueByCountry: Object.fromEntries(
                         byCountryResult.map(item => [item.country || "Unknown", item.revenue])
                     )

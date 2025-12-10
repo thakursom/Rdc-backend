@@ -1,6 +1,7 @@
 const Artist = require("../models/artistModel");
 const ResponseService = require("../services/responseService");
 const User = require("../models/userModel");
+const TblReport2025 = require("../models/tblReport2025Model");
 
 class ArtistController {
 
@@ -8,38 +9,69 @@ class ArtistController {
 
     //getAllArtists method
     async getAllArtists(req, res, next) {
-        console.log("testinggg");
-
         try {
-            console.log("req.user", req.user)
             const { role, userId } = req.user;
-            console.log("userId", userId);
-            console.log("login")
             const { page = 1, limit = 20, search } = req.query;
 
             const skip = (page - 1) * limit;
 
-            // ---- BASE QUERY ----
             let query = {};
 
-            // ✅ If NOT Super Admin → filter by userId
             if (role !== "Super Admin" && role !== "Manager") {
                 query.created_by = userId;
-                console.log("labelll");
             }
 
-            // ✅ Search filter
             if (search && search.trim() !== "") {
-                const regex = new RegExp(search, "i");
-                query.name = regex;
+                query.name = new RegExp(search, "i");
             }
 
-            // ---- FETCH DATA ----
             const artists = await Artist.find(query)
                 .skip(skip)
-                .limit(Number(limit));
+                .limit(Number(limit))
+                .lean();
 
             const total = await Artist.countDocuments(query);
+
+            // SAFE AGGREGATION
+            const stats = await TblReport2025.aggregate([
+                {
+                    $group: {
+                        _id: "$track_artist",
+                        totalStream: {
+                            $sum: {
+                                $convert: {
+                                    input: "$track_count",
+                                    to: "int",
+                                    onError: 0,
+                                    onNull: 0
+                                }
+                            }
+                        },
+                        totalRevenue: {
+                            $sum: {
+                                $convert: {
+                                    input: "$net_total",
+                                    to: "double",
+                                    onError: 0,
+                                    onNull: 0
+                                }
+                            }
+                        },
+                        countries: { $addToSet: "$territory" }
+                    }
+                }
+            ]);
+
+            // Map for fast lookup
+            let statsMap = {};
+            stats.forEach(s => (statsMap[s._id] = s));
+
+            artists.forEach(a => {
+                const s = statsMap[a.name];
+                a.totalStream = s?.totalStream || 0;
+                a.totalRevenue = s?.totalRevenue || 0;
+                a.countries = s?.countries || [];
+            });
 
             return ResponseService.success(res, "Artists fetched successfully....", {
                 artists,
@@ -55,7 +87,6 @@ class ArtistController {
             return ResponseService.error(res, "Failed to fetch artists", 500, error);
         }
     }
-
 
     //fetchArtistById method
     async fetchArtistById(req, res) {
