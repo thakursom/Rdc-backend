@@ -1,6 +1,7 @@
-const Artist = require("../models/artistModel");
 const ResponseService = require("../services/responseService");
+
 const User = require("../models/userModel");
+const Artist = require("../models/artistModel");
 const TblReport2025 = require("../models/tblReport2025Model");
 
 class ArtistController {
@@ -31,8 +32,6 @@ class ArtistController {
                 .lean();
 
             const total = await Artist.countDocuments(query);
-
-            // SAFE AGGREGATION
             const stats = await TblReport2025.aggregate([
                 {
                     $group: {
@@ -144,6 +143,121 @@ class ArtistController {
         }
     }
 
+    //fetchArtistByName method
+    async fetchArtistByName(req, res) {
+        try {
+            let { artistName, page = 1, limit = 10, search, fromDate, toDate } = req.query;
+
+            if (!artistName) {
+                return res.status(400).json({
+                    success: false,
+                    message: "artistName is required",
+                });
+            }
+
+            page = Number(page);
+            limit = Number(limit);
+            const skip = (page - 1) * limit;
+
+            // Base match for topRelease/topDSP/topCountry (ignore filters)
+            const baseMatch = {
+                track_artist: { $regex: artistName, $options: "i" },
+            };
+
+            // Match for filtered records (apply search/date filters)
+            const recordMatch = { ...baseMatch };
+            if (search && search.trim() !== "") {
+                recordMatch.release = new RegExp(search, "i");
+            }
+            if (fromDate || toDate) {
+                recordMatch.date = {};
+                if (fromDate) recordMatch.date.$gte = fromDate;
+                if (toDate) recordMatch.date.$lte = toDate;
+            }
+
+            const result = await TblReport2025.aggregate([
+                {
+                    $facet: {
+                        // Filtered records
+                        records: [
+                            { $match: recordMatch },
+                            { $sort: { date: -1 } },
+                            { $skip: skip },
+                            { $limit: limit }
+                        ],
+
+                        // Total count for filtered records
+                        totalCount: [
+                            { $match: recordMatch },
+                            { $count: "count" },
+                        ],
+
+                        // Top Release (unfiltered except artistName)
+                        topRelease: [
+                            { $match: baseMatch },
+                            {
+                                $group: {
+                                    _id: "$release",
+                                    totalRevenue: { $sum: { $toDouble: "$net_total" } }
+                                }
+                            },
+                            { $sort: { totalRevenue: -1 } },
+                            { $limit: 1 }
+                        ],
+
+                        // Top DSP (unfiltered except artistName)
+                        topDSP: [
+                            { $match: baseMatch },
+                            {
+                                $group: {
+                                    _id: "$retailer",
+                                    totalRevenue: { $sum: { $toDouble: "$net_total" } }
+                                }
+                            },
+                            { $sort: { totalRevenue: -1 } },
+                            { $limit: 1 }
+                        ],
+
+                        // Top Country (unfiltered except artistName)
+                        topCountry: [
+                            { $match: baseMatch },
+                            {
+                                $group: {
+                                    _id: "$territory",
+                                    totalRevenue: { $sum: { $toDouble: "$net_total" } }
+                                }
+                            },
+                            { $sort: { totalRevenue: -1 } },
+                            { $limit: 1 }
+                        ]
+                    }
+                }
+            ]);
+
+            const response = result[0];
+
+            return res.json({
+                success: true,
+                pagination: {
+                    page,
+                    limit,
+                    totalCount: response.totalCount[0]?.count || 0,
+                    totalPages: Math.ceil((response.totalCount[0]?.count || 0) / limit),
+                },
+                data: response.records,
+                topRelease: response.topRelease[0] || null,
+                topDSP: response.topDSP[0] || null,
+                topCountry: response.topCountry[0] || null,
+            });
+
+        } catch (error) {
+            console.log("fetchArtistByName Error:", error);
+            return res.status(500).json({
+                success: false,
+                message: error.message,
+            });
+        }
+    }
 
 }
 
