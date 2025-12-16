@@ -109,15 +109,19 @@ class contractController {
                 });
             }
 
-            // Only relative path
-            const relativePath = `uploads/contracts/${req.file.filename}`;
-
-            // Use BASE_URL from env ALWAYS
-            const fileURL = `${process.env.BASE_URL}/${relativePath}`;
-
-            // Delete old PDF if new uploaded
+            // Check if a new file was uploaded
             let pdfFile = existingContract.pdf;
+
             if (req.file) {
+                console.log("New file uploaded:", req.file.filename);
+
+                // Only relative path
+                const relativePath = `uploads/contracts/${req.file.filename}`;
+
+                // Use BASE_URL from env ALWAYS
+                const fileURL = `${process.env.BASE_URL}/${relativePath}`;
+
+                // Delete old PDF if new uploaded
                 const oldFilePath = path.join(
                     __dirname,
                     "../uploads/contracts",
@@ -127,6 +131,8 @@ class contractController {
                     fs.unlinkSync(oldFilePath);
                 }
                 pdfFile = fileURL;
+            } else {
+                console.log("No new file uploaded, keeping existing file");
             }
 
             // Update contract
@@ -258,35 +264,141 @@ class contractController {
             page = Number(page);
             limit = Number(limit);
 
-            let query = {};
+            let matchQuery = {};
 
-            // 🔍 Search filter
+            // Search filter
             if (search) {
-                query.$or = [
+                matchQuery.$or = [
                     { contractName: { $regex: search, $options: "i" } },
                     { label: { $regex: search, $options: "i" } },
                 ];
             }
 
-            // 🔥 NEW LOGIC: If NOT Super Admin → find all child users
+            // Role-based filtering
             if (role !== "Super Admin" && role !== "Manager") {
-                // 1️⃣ Find users where parent_id = logged in user
                 const users = await User.find({ parent_id: userId }, { id: 1 });
-
-                // 2️⃣ Extract IDs
                 const childIds = users.map(u => u.id);
 
-                // 3️⃣ Also include own ID
-                // childIds.push(userId);
-
-                // 4️⃣ Apply condition → user_id IN [...all ids]
-                query.user_id = { $in: childIds };
+                matchQuery.user_id = { $in: childIds };
             }
 
-            // Count
+            // Total count (latest per user)
+            const totalAgg = await Contract.aggregate([
+                { $match: matchQuery },
+                { $sort: { createdAt: -1 } },
+                {
+                    $group: {
+                        _id: "$user_id"
+                    }
+                },
+                { $count: "total" }
+            ]);
+
+            const total = totalAgg[0]?.total || 0;
+
+            // Data aggregation
+            const data = await Contract.aggregate([
+                { $match: matchQuery },
+
+                // Latest contract first
+                { $sort: { createdAt: -1 } },
+
+                // One contract per user
+                {
+                    $group: {
+                        _id: "$user_id",
+                        contract: { $first: "$$ROOT" }
+                    }
+                },
+
+                // Restore document shape
+                { $replaceRoot: { newRoot: "$contract" } },
+
+                // Join user data
+                {
+                    $lookup: {
+                        from: "users",
+                        localField: "user_id",
+                        foreignField: "id",
+                        as: "user"
+                    }
+                },
+                {
+                    $unwind: {
+                        path: "$user",
+                        preserveNullAndEmptyArrays: true
+                    }
+                },
+
+                // Sort users by latest contract
+                { $sort: { createdAt: -1 } },
+
+                // Pagination
+                { $skip: (page - 1) * limit },
+                { $limit: limit },
+
+                // Final response shape
+                {
+                    $project: {
+                        _id: 1,
+                        user_id: 1,
+                        contractName: 1,
+                        description: 1,
+                        labelPercentage: 1,
+                        startDate: 1,
+                        endDate: 1,
+                        pdf: 1,
+                        status: 1,
+                        createdAt: 1,
+                        userName: "$user.name",
+                        userEmail: "$user.email",
+                    }
+                }
+            ]);
+
+            return res.status(200).json({
+                success: true,
+                message: "Latest contracts fetched successfully",
+                data,
+                pagination: {
+                    total,
+                    page,
+                    limit,
+                    totalPages: Math.ceil(total / limit),
+                },
+            });
+
+        } catch (error) {
+            console.error("Fetch Contracts Error:", error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || "Internal server error",
+            });
+        }
+    }
+
+    //getContractsByUser method
+    async getContractsByUser(req, res) {
+        try {
+            let { userId, page = 1, limit = 10 } = req.query;
+
+            page = Number(page);
+            limit = Number(limit);
+
+            if (!userId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "User ID is required"
+                });
+            }
+
+            // CRITICAL FIX: convert to Number
+            const parsedUserId = Number(userId);
+
+            const query = { user_id: parsedUserId };
+
             const total = await Contract.countDocuments(query);
 
-            // Aggregation
             const data = await Contract.aggregate([
                 { $match: query },
 
@@ -315,7 +427,7 @@ class contractController {
                         user_id: 1,
                         contractName: 1,
                         description: 1,
-                        label: 1,
+                        labelPercentage: 1,
                         startDate: 1,
                         endDate: 1,
                         pdf: 1,
@@ -340,7 +452,7 @@ class contractController {
             });
 
         } catch (error) {
-            console.error("Fetch Contracts Error:", error);
+            console.error("Error fetching contracts by user:", error);
             return res.status(500).json({
                 success: false,
                 message: error.message || "Internal server error",

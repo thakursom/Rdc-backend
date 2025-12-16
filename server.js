@@ -32,6 +32,12 @@ app.use(
     express.static(path.join(__dirname, "src/uploads/labelSample"))
 );
 
+// Serve payoutSample folder
+app.use(
+    "/uploads/payoutSample",
+    express.static(path.join(__dirname, "src/uploads/payoutSample"))
+);
+
 // Routes
 app.get("/", (req, res) => {
     res.send("API is running...");

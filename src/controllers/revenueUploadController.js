@@ -17,7 +17,7 @@ const YouTubePartnerChannelRevenue = require("../models/youTubePartnerChannelRev
 const YouTubeRDCChannelRevenue = require("../models/youTubeRDCChannelRevenueModel");
 const YouTubeVideoClaimRevenue = require("../models/youTubeVideoClaimRevenueModel");
 const YTPremiumRevenue = require("../models/ytPremiumRevenueModel");
-
+const { excelSerialToISODate } = require("../utils/dateUtils");
 
 
 
@@ -42,8 +42,8 @@ class revenueUploadController {
             const RevenueUploads = await RevenueUpload.create({
                 user_id: 0,
                 platform,
-                periodFrom,
-                periodTo,
+                periodFrom: periodFrom || null,
+                periodTo: periodTo || null,
                 fileName: req.file.filename,
                 filePath: fileURL,
                 fileExt: req.file.mimetype,
@@ -53,6 +53,7 @@ class revenueUploadController {
             const workbook = XLSX.readFile(req.file.path);
             const sheet = workbook.Sheets[workbook.SheetNames[0]];
             const jsonData = XLSX.utils.sheet_to_json(sheet);
+
 
             if (jsonData.length === 0) {
                 return res.status(400).json({ error: "Excel file is empty" });
@@ -87,6 +88,7 @@ class revenueUploadController {
                         track_count: r.event_count_1 || null,
                         sale_type: null,
                         net_total: r["Total Revenue"] || null,
+                        date: excelSerialToISODate(r.Month) || null,
                     };
 
                     // SPOTIFY MAPPING
@@ -110,6 +112,7 @@ class revenueUploadController {
                         track_count: r.Quantity || null,
                         sale_type: null,
                         net_total: r.Total || null,
+                        date: excelSerialToISODate(r.Month) || null,
                     };
 
                     // Amazon MAPPING
@@ -133,6 +136,7 @@ class revenueUploadController {
                         track_count: r["Total Plays"] || null,
                         sale_type: null,
                         net_total: r[" Total Revenue"] || null,
+                        date: excelSerialToISODate(r.Month) || null,
                     };
 
                     //JioSaavan MAPPING
@@ -156,6 +160,7 @@ class revenueUploadController {
                         track_count: r["Total Streams"] || null,
                         sale_type: null,
                         net_total: r["Total Revenue"] || null,
+                        date: excelSerialToISODate(r.Months) || null,
                     };
 
                     //AppleItunes MAPPING
@@ -179,6 +184,7 @@ class revenueUploadController {
                         track_count: r.Quantity || null,
                         sale_type: null,
                         net_total: r["Total Revenue"] || null,
+                        date: excelSerialToISODate(r.Month) || null,
                     };
 
                     //TikTok MAPPING
@@ -202,6 +208,7 @@ class revenueUploadController {
                         track_count: r.Views || null,
                         sale_type: null,
                         net_total: r["Total Revenue"] || null,
+                        date: excelSerialToISODate(r.Months) || null,
                     };
 
                     //Gaana MAPPING
@@ -225,6 +232,7 @@ class revenueUploadController {
                         track_count: r["Total Playouts"] || null,
                         sale_type: null,
                         net_total: r["Total"] || null,
+                        date: excelSerialToISODate(r.Month) || null,
                     };
                 } else if (platform === "SoundRecording") {
                     obj = {
@@ -246,6 +254,7 @@ class revenueUploadController {
                         track_count: r["Owned Views"] || null,
                         sale_type: null,
                         net_total: r["Total Revenue"] || null,
+                        date: excelSerialToISODate(r.Month) || null,
                     };
                 } else if (platform === "YouTubeArtTrack") {
                     obj = {
@@ -267,6 +276,7 @@ class revenueUploadController {
                         track_count: r["Owned Views"] || null,
                         sale_type: null,
                         net_total: r["Total Revenue"] || null,
+                        date: excelSerialToISODate(r.Month) || null,
                     };
                 } else if (platform === "YouTubePartnerChannel") {
                     obj = {
@@ -288,6 +298,7 @@ class revenueUploadController {
                         track_count: r["Owned Views"] || null,
                         sale_type: null,
                         net_total: r["Total INR"] || null,
+                        date: excelSerialToISODate(r.Month) || null,
                     };
                 } else if (platform === "YouTubeRDCChannel") {
                     obj = {
@@ -309,6 +320,7 @@ class revenueUploadController {
                         track_count: r["Owned Views"] || null,
                         sale_type: null,
                         net_total: r["Total INR"] || null,
+                        date: excelSerialToISODate(r.Month) || null,
                     };
                 } else if (platform === "YouTubeVideoClaim") {
                     obj = {
@@ -330,6 +342,7 @@ class revenueUploadController {
                         track_count: r["Owned Views"] || null,
                         sale_type: null,
                         net_total: r["Total INR"] || null,
+                        date: excelSerialToISODate(r.Month) || null,
                     };
                 } else if (platform === "YTPremiumRevenue") {
                     obj = {
@@ -351,11 +364,12 @@ class revenueUploadController {
                         track_count: r["Owned Views"] || null,
                         sale_type: null,
                         net_total: r["Total INR"] || null,
+                        date: excelSerialToISODate(r.Month) || null,
                     };
                 }
 
                 const today = new Date().toISOString().split("T")[0];
-                obj.date = today;
+                // obj.date = today;
                 obj.user_id = 0;
                 obj.uploading_date = today;
                 obj.uploadId = RevenueUploads._id;
@@ -574,8 +588,8 @@ class revenueUploadController {
         try {
             const {
                 platform,
+                year,
                 month,
-                quarter,
                 fromDate,
                 toDate,
                 releases,
@@ -610,11 +624,20 @@ class revenueUploadController {
                 filter.retailer = { $in: defaultRetailers };
             }
 
-            // Month filter
+            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
+
+            // Year only
+            if (year && !month && !fromDate && !toDate) {
+                filter.date = {
+                    $gte: `${selectedYear}-01-01`,
+                    $lte: `${selectedYear}-12-31`
+                };
+            }
+
+            // Month + Year
             if (month && month !== '') {
-                const year = new Date().getFullYear();
-                const startDate = new Date(year, parseInt(month) - 1, 1);
-                const endDate = new Date(year, parseInt(month), 0);
+                const startDate = new Date(selectedYear, parseInt(month) - 1, 1);
+                const endDate = new Date(selectedYear, parseInt(month), 0);
                 filter.date = {
                     $gte: startDate.toISOString().split("T")[0],
                     $lte: endDate.toISOString().split("T")[0]
@@ -622,24 +645,35 @@ class revenueUploadController {
             }
 
             // Quarter filter
-            if (quarter && quarter !== '') {
-                const quarterMonths = { '1': [1, 2, 3], '2': [4, 5, 6], '3': [7, 8, 9], '4': [10, 11, 12] };
-                if (quarterMonths[quarter]) {
-                    const year = new Date().getFullYear();
-                    const months = quarterMonths[quarter];
-                    const start = new Date(year, months[0] - 1, 1);
-                    const end = new Date(year, months[2], 0);
-                    filter.date = {
-                        $gte: start.toISOString().split("T")[0],
-                        $lte: end.toISOString().split("T")[0]
-                    };
-                }
-            }
+            // if (quarter && quarter !== '') {
+            //     const quarterMonths = { '1': [1, 2, 3], '2': [4, 5, 6], '3': [7, 8, 9], '4': [10, 11, 12] };
+            //     if (quarterMonths[quarter]) {
+            //         const year = new Date().getFullYear();
+            //         const months = quarterMonths[quarter];
+            //         const start = new Date(year, months[0] - 1, 1);
+            //         const end = new Date(year, months[2], 0);
+            //         filter.date = {
+            //             $gte: start.toISOString().split("T")[0],
+            //             $lte: end.toISOString().split("T")[0]
+            //         };
+            //     }
+            // }
 
             // Custom date range
             if (fromDate && toDate) {
-                filter.date = { $gte: fromDate, $lte: toDate };
+
+                const [fromYear, fromMonth] = fromDate.split("-").map(Number);
+                const [toYear, toMonth] = toDate.split("-").map(Number);
+
+                const startDate = new Date(fromYear, fromMonth - 1, 1);
+                const endDate = new Date(toYear, toMonth, 0);
+
+                filter.date = {
+                    $gte: startDate.toISOString().split("T")[0],
+                    $lte: endDate.toISOString().split("T")[0]
+                };
             }
+
 
             // Checkbox filters
             if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
@@ -857,8 +891,8 @@ class revenueUploadController {
         try {
             const {
                 platform,
+                year,
                 month,
-                quarter,
                 fromDate,
                 toDate,
                 releases,
@@ -892,11 +926,20 @@ class revenueUploadController {
                 filter.retailer = { $in: defaultRetailers };
             }
 
-            // Month filter
+            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
+
+            // Year only
+            if (year && !month && !fromDate && !toDate) {
+                filter.date = {
+                    $gte: `${selectedYear}-01-01`,
+                    $lte: `${selectedYear}-12-31`
+                };
+            }
+
+            // Month + Year
             if (month && month !== '') {
-                const year = new Date().getFullYear();
-                const startDate = new Date(year, parseInt(month) - 1, 1);
-                const endDate = new Date(year, parseInt(month), 0);
+                const startDate = new Date(selectedYear, parseInt(month) - 1, 1);
+                const endDate = new Date(selectedYear, parseInt(month), 0);
                 filter.date = {
                     $gte: startDate.toISOString().split("T")[0],
                     $lte: endDate.toISOString().split("T")[0]
@@ -904,23 +947,33 @@ class revenueUploadController {
             }
 
             // Quarter filter
-            if (quarter && quarter !== '') {
-                const quarterMonths = { '1': [1, 2, 3], '2': [4, 5, 6], '3': [7, 8, 9], '4': [10, 11, 12] };
-                if (quarterMonths[quarter]) {
-                    const year = new Date().getFullYear();
-                    const months = quarterMonths[quarter];
-                    const start = new Date(year, months[0] - 1, 1);
-                    const end = new Date(year, months[2], 0);
-                    filter.date = {
-                        $gte: start.toISOString().split("T")[0],
-                        $lte: end.toISOString().split("T")[0]
-                    };
-                }
-            }
+            // if (quarter && quarter !== '') {
+            //     const quarterMonths = { '1': [1, 2, 3], '2': [4, 5, 6], '3': [7, 8, 9], '4': [10, 11, 12] };
+            //     if (quarterMonths[quarter]) {
+            //         const year = new Date().getFullYear();
+            //         const months = quarterMonths[quarter];
+            //         const start = new Date(year, months[0] - 1, 1);
+            //         const end = new Date(year, months[2], 0);
+            //         filter.date = {
+            //             $gte: start.toISOString().split("T")[0],
+            //             $lte: end.toISOString().split("T")[0]
+            //         };
+            //     }
+            // }
 
             // Custom date range
             if (fromDate && toDate) {
-                filter.date = { $gte: fromDate, $lte: toDate };
+
+                const [fromYear, fromMonth] = fromDate.split("-").map(Number);
+                const [toYear, toMonth] = toDate.split("-").map(Number);
+
+                const startDate = new Date(fromYear, fromMonth - 1, 1);
+                const endDate = new Date(toYear, toMonth, 0);
+
+                filter.date = {
+                    $gte: startDate.toISOString().split("T")[0],
+                    $lte: endDate.toISOString().split("T")[0]
+                };
             }
 
             // Checkbox filters
@@ -1139,8 +1192,8 @@ class revenueUploadController {
         try {
             const {
                 platform,
+                year,
                 month,
-                quarter,
                 fromDate,
                 toDate,
                 releases,
@@ -1173,43 +1226,61 @@ class revenueUploadController {
                 filter.retailer = { $in: defaultRetailers };
             }
 
-            // Month filter
-            if (month && month !== '') {
-                const year = new Date().getFullYear();
-                const startDate = new Date(year, parseInt(month) - 1, 1);
-                const endDate = new Date(year, parseInt(month), 0);
+            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
 
+            // Year only
+            if (year && !month && !fromDate && !toDate) {
                 filter.date = {
-                    $gte: startDate.toISOString().split('T')[0],
-                    $lte: endDate.toISOString().split('T')[0]
+                    $gte: `${selectedYear}-01-01`,
+                    $lte: `${selectedYear}-12-31`
+                };
+            }
+
+            // Month + Year
+            if (month && month !== '') {
+                const startDate = new Date(selectedYear, parseInt(month) - 1, 1);
+                const endDate = new Date(selectedYear, parseInt(month), 0);
+                filter.date = {
+                    $gte: startDate.toISOString().split("T")[0],
+                    $lte: endDate.toISOString().split("T")[0]
                 };
             }
 
             // Quarter filter
-            if (quarter && quarter !== '') {
-                const quarterMonths = {
-                    '1': [1, 2, 3],
-                    '2': [4, 5, 6],
-                    '3': [7, 8, 9],
-                    '4': [10, 11, 12]
-                };
+            // if (quarter && quarter !== '') {
+            //     const quarterMonths = {
+            //         '1': [1, 2, 3],
+            //         '2': [4, 5, 6],
+            //         '3': [7, 8, 9],
+            //         '4': [10, 11, 12]
+            //     };
 
-                if (quarterMonths[quarter]) {
-                    const year = new Date().getFullYear();
-                    const months = quarterMonths[quarter];
-                    const start = new Date(year, months[0] - 1, 1);
-                    const end = new Date(year, months[2], 0);
+            //     if (quarterMonths[quarter]) {
+            //         const year = new Date().getFullYear();
+            //         const months = quarterMonths[quarter];
+            //         const start = new Date(year, months[0] - 1, 1);
+            //         const end = new Date(year, months[2], 0);
 
-                    filter.date = {
-                        $gte: start.toISOString().split('T')[0],
-                        $lte: end.toISOString().split('T')[0]
-                    };
-                }
-            }
+            //         filter.date = {
+            //             $gte: start.toISOString().split('T')[0],
+            //             $lte: end.toISOString().split('T')[0]
+            //         };
+            //     }
+            // }
 
             // Custom date range
             if (fromDate && toDate) {
-                filter.date = { $gte: fromDate, $lte: toDate };
+
+                const [fromYear, fromMonth] = fromDate.split("-").map(Number);
+                const [toYear, toMonth] = toDate.split("-").map(Number);
+
+                const startDate = new Date(fromYear, fromMonth - 1, 1);
+                const endDate = new Date(toYear, toMonth, 0);
+
+                filter.date = {
+                    $gte: startDate.toISOString().split("T")[0],
+                    $lte: endDate.toISOString().split("T")[0]
+                };
             }
 
             // Checkbox filters
@@ -1305,8 +1376,8 @@ class revenueUploadController {
         try {
             const {
                 platform,
+                year,
                 month,
-                quarter,
                 fromDate,
                 toDate,
                 releases,
@@ -1338,43 +1409,61 @@ class revenueUploadController {
                 filter.retailer = { $in: defaultRetailers };
             }
 
-            // Month filter
-            if (month && month !== '') {
-                const year = new Date().getFullYear();
-                const startDate = new Date(year, parseInt(month) - 1, 1);
-                const endDate = new Date(year, parseInt(month), 0);
+            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
 
+            // Year only
+            if (year && !month && !fromDate && !toDate) {
                 filter.date = {
-                    $gte: startDate.toISOString().split('T')[0],
-                    $lte: endDate.toISOString().split('T')[0]
+                    $gte: `${selectedYear}-01-01`,
+                    $lte: `${selectedYear}-12-31`
+                };
+            }
+
+            // Month + Year
+            if (month && month !== '') {
+                const startDate = new Date(selectedYear, parseInt(month) - 1, 1);
+                const endDate = new Date(selectedYear, parseInt(month), 0);
+                filter.date = {
+                    $gte: startDate.toISOString().split("T")[0],
+                    $lte: endDate.toISOString().split("T")[0]
                 };
             }
 
             // Quarter filter
-            if (quarter && quarter !== '') {
-                const quarterMonths = {
-                    '1': [1, 2, 3],
-                    '2': [4, 5, 6],
-                    '3': [7, 8, 9],
-                    '4': [10, 11, 12]
-                };
+            // if (quarter && quarter !== '') {
+            //     const quarterMonths = {
+            //         '1': [1, 2, 3],
+            //         '2': [4, 5, 6],
+            //         '3': [7, 8, 9],
+            //         '4': [10, 11, 12]
+            //     };
 
-                if (quarterMonths[quarter]) {
-                    const year = new Date().getFullYear();
-                    const months = quarterMonths[quarter];
-                    const start = new Date(year, months[0] - 1, 1);
-                    const end = new Date(year, months[2], 0);
+            //     if (quarterMonths[quarter]) {
+            //         const year = new Date().getFullYear();
+            //         const months = quarterMonths[quarter];
+            //         const start = new Date(year, months[0] - 1, 1);
+            //         const end = new Date(year, months[2], 0);
 
-                    filter.date = {
-                        $gte: start.toISOString().split('T')[0],
-                        $lte: end.toISOString().split('T')[0]
-                    };
-                }
-            }
+            //         filter.date = {
+            //             $gte: start.toISOString().split('T')[0],
+            //             $lte: end.toISOString().split('T')[0]
+            //         };
+            //     }
+            // }
 
             // Custom date range
             if (fromDate && toDate) {
-                filter.date = { $gte: fromDate, $lte: toDate };
+
+                const [fromYear, fromMonth] = fromDate.split("-").map(Number);
+                const [toYear, toMonth] = toDate.split("-").map(Number);
+
+                const startDate = new Date(fromYear, fromMonth - 1, 1);
+                const endDate = new Date(toYear, toMonth, 0);
+
+                filter.date = {
+                    $gte: startDate.toISOString().split("T")[0],
+                    $lte: endDate.toISOString().split("T")[0]
+                };
             }
 
             // Checkbox filters
@@ -1464,6 +1553,48 @@ class revenueUploadController {
         }
     }
 
+    // deleteRevenueByUserId method
+    async deleteRevenueByUserId(req, res, next) {
+        try {
+            const { userId } = req.query;
+
+            if (!userId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "User ID is required"
+                });
+            }
+
+            // Delete upload entry
+            const revenueUploadResult = await RevenueUpload.findByIdAndDelete(userId);
+
+            if (!revenueUploadResult) {
+                return res.status(404).json({
+                    success: false,
+                    message: "RevenueUpload record not found"
+                });
+            }
+
+            // Delete revenue reports
+            const tempReportResult = await TempReport.deleteMany({
+                uploadId: userId
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: "Revenue data deleted successfully",
+                tempReportDeletedCount: tempReportResult.deletedCount,
+                revenueUploadDeleted: true
+            });
+
+        } catch (error) {
+            console.error("Error deleting revenue by user ID:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error"
+            });
+        }
+    }
 
 }
 

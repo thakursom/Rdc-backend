@@ -19,7 +19,7 @@ const PaymentHistorySchema = new mongoose.Schema({
 
     totalAmount: {
         type: Number,
-        required: true
+        required: false
     },
 
     description: {

@@ -1,3 +1,4 @@
+const XLSX = require("xlsx");
 const PaymentHistory = require("../models/paymentHistoryModel");
 const LogService = require("../services/logService");
 
@@ -14,24 +15,48 @@ class payoutController {
                 user_id,
                 paymentMethod,
                 amount,
-                totalAmount,
                 description,
-                paymentDetails
+                paymentDetails: inputDetails
             } = req.body;
 
-            if (!user_id || !paymentMethod || !amount || !totalAmount || !paymentDetails) {
+            if (!user_id || !paymentMethod || !amount) {
                 return res.status(400).json({
                     success: false,
                     message: "Missing required fields"
                 });
             }
 
+            let paymentDetails = {};
+
+            if (paymentMethod === "bank") {
+                paymentDetails = {
+                    bankName: inputDetails?.bankName || "",
+                    accountHolderName: inputDetails?.accountHolderName || "",
+                    accountNumber: inputDetails?.accountNumber || "",
+                    ifsc: inputDetails?.ifsc || "",
+                    swiftCode: inputDetails?.swiftCode || "",
+                    branch: inputDetails?.branch || ""
+                };
+            }
+
+            if (paymentMethod === "paypal") {
+                paymentDetails = {
+                    paypalEmail: inputDetails?.paypalEmail || ""
+                };
+            }
+
+            if (paymentMethod === "upi") {
+                paymentDetails = {
+                    upiId: inputDetails?.upiId || ""
+                };
+            }
+
             const payload = {
                 user_id,
                 paymentMethod,
                 amount,
-                totalAmount,
-                description,
+                totalAmount: null,
+                description: description || "",
                 paymentDetails
             };
 
@@ -141,6 +166,107 @@ class payoutController {
         }
     }
 
+    // uploadBulkPayout method
+    async uploadBulkPayout(req, res, next) {
+        try {
+            const { userId, email } = req.user;
+
+            if (!req.file) {
+                return res.status(400).json({
+                    success: false,
+                    message: "No file uploaded"
+                });
+            }
+
+            // Read Excel
+            const workbook = XLSX.readFile(req.file.path);
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(sheet);
+
+            if (!rows.length) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Excel file is empty"
+                });
+            }
+
+            const payouts = [];
+
+            for (const row of rows) {
+                // Required fields validation
+                if (!row["User ID"] || !row["Payment Method"] || !row["Amount"]) {
+                    continue; // skip invalid rows
+                }
+
+                const paymentMethod = row["Payment Method"].toLowerCase();
+
+                // Build paymentDetails based on method
+                let paymentDetails = {};
+
+                if (paymentMethod === "bank") {
+                    paymentDetails = {
+                        bankName: row["Bank Name"] || "",
+                        accountHolderName: row["Account Holder Name"] || "",
+                        accountNumber: row["Account Number"] || "",
+                        ifsc: row["IFSC/Routing"] || "",
+                        swiftCode: row["SWIFT Code"] || "",
+                        branch: row["Branch"] || ""
+                    };
+                }
+
+                if (paymentMethod === "paypal") {
+                    paymentDetails = {
+                        paypalEmail: row["PayPal Email"] || ""
+                    };
+                }
+
+                if (paymentMethod === "upi") {
+                    paymentDetails = {
+                        upiId: row["UPI ID"] || ""
+                    };
+                }
+
+                payouts.push({
+                    user_id: Number(row["User ID"]),
+                    paymentMethod,
+                    amount: Number(row["Amount"]),
+                    totalAmount: null,
+                    description: row["Description"] || "",
+                    paymentDetails
+                });
+            }
+
+            if (!payouts.length) {
+                return res.status(400).json({
+                    success: false,
+                    message: "No valid payout records found"
+                });
+            }
+
+            // Bulk insert
+            const insertedPayouts = await PaymentHistory.insertMany(payouts);
+
+            // Log
+            await LogService.createLog({
+                user_id: userId,
+                email,
+                action: "ADD_BULK_PAYOUT",
+                description: "Bulk payout uploaded successfully",
+                newData: insertedPayouts,
+                req
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: "Bulk payout uploaded successfully",
+                inserted: insertedPayouts.length
+            });
+
+        } catch (error) {
+            console.error("Bulk Payout Upload Error:", error);
+            next(error);
+        }
+    }
 
 }
 

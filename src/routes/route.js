@@ -58,6 +58,7 @@ router.get("/getBankDetailForPayout", authMiddleware, bankController.getBankDeta
 router.post("/addContract", upload.single("pdf"), authMiddleware, contractController.addContract);
 router.put("/editContract/:id", upload.single("pdf"), authMiddleware, contractController.editContract);
 router.get("/getAllContracts", authMiddleware, contractController.getAllContracts);
+router.get("/getContractsByUser", authMiddleware, contractController.getContractsByUser);
 router.get("/getContractById", authMiddleware, contractController.getContractById);
 router.delete("/deleteContract/:id", authMiddleware, contractController.deleteContract);
 router.get("/contractLogs", authMiddleware, contractController.getContractLogs);
@@ -79,12 +80,14 @@ router.get('/audioStreamingRevenueReport', authMiddleware, revenueController.get
 router.get('/youtubeRevenueReport', authMiddleware, revenueController.getYoutubeRevenueReport);
 router.get('/revenueReports/export/audioStreamingExcel', authMiddleware, revenueController.downloadAudioStreamingExcelReport);
 router.get('/revenueReports/export/youtubeExcel', authMiddleware, revenueController.downloadYoutubeExcelReport);
+router.delete('/deleteRevenueByUserId', authMiddleware, revenueController.deleteRevenueByUserId);
 
 
 
 //Payout Apis
 router.post("/createPayout", authMiddleware, payoutController.createPayout);
 router.get("/getAllPayouts", authMiddleware, payoutController.getAllPayouts);
+router.post("/uploadBulkPayout", authMiddleware, upload.single("file"), payoutController.uploadBulkPayout);
 
 //Log Apis
 router.get("/getAllLogs", authMiddleware, logController.getAllLogs);

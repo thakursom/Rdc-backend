@@ -21,11 +21,11 @@ const revenueUploadSchema = new mongoose.Schema({
     },
     periodFrom: {
         type: String,
-        required: true
+        required: false
     },
     periodTo: {
         type: String,
-        required: true
+        required: false
     },
     isAccepted: {
         type: Boolean,
