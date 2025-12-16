@@ -42,6 +42,8 @@ router.get("/fetchArtistByName", authMiddleware, artistController.fetchArtistByN
 //Third_party Apis
 router.get("/fetch-and-store", authController.insertUsersFromAPI);
 router.get("/fetch-artist", authController.insertArtistsFromAPI);
+router.get("/fetch-release", authController.insertReleasesFromAPI);
+router.get("/fetch-track", authController.insertTracksFromAPI);
 
 
 //Bank Details Apis

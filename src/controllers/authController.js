@@ -8,6 +8,8 @@ const sendEmail = require("../utils/sendEmail");
 const User = require("../models/userModel");
 const Artist = require("../models/artistModel");
 const LogService = require("../services/logService");
+const Release = require("../models/releaseModel");
+const Track = require("../models/trackModel");
 
 class AuthController {
 
@@ -368,6 +370,260 @@ class AuthController {
             });
         }
     }
+
+    async insertReleasesFromAPI(req, res) {
+        try {
+            res.status(200).json({
+                success: true,
+                message: "Release import started in background"
+            });
+
+            setImmediate(async () => {
+                try {
+                    const apiResponse = await axios.get(
+                        "https://beta.content.rdcmedia.in/api/releases",
+                        {
+                            headers: {
+                                Accept: "application/json",
+                                "X-API-TOKEN": process.env.RDC_API_TOKEN
+                            }
+                        }
+                    );
+
+                    let releases = [];
+
+                    if (Array.isArray(apiResponse.data)) {
+                        releases = apiResponse.data;
+                    } else if (apiResponse.data?.data) {
+                        releases = apiResponse.data.data;
+                    }
+
+                    console.log(`Total releases fetched: ${releases.length}`);
+
+                    const formattedReleases = releases.map(r => ({
+                        sublabel_id: r.sublabel_id,
+                        label_id: Number(r.label_id) || null,
+
+                        lang: r.lang,
+                        content_lang: r.content_lang,
+
+                        title: r.title,
+
+                        display_artist: (() => {
+                            try {
+                                return typeof r.display_artist === "string"
+                                    ? JSON.parse(r.display_artist)
+                                    : Array.isArray(r.display_artist)
+                                        ? r.display_artist
+                                        : r.display_artist
+                                            ? [r.display_artist]
+                                            : [];
+                            } catch (e) {
+                                return r.display_artist ? [r.display_artist] : [];
+                            }
+                        })(),
+
+
+                        artwork: r.artwork,
+                        rename_artwork: r.rename_artwork,
+
+                        release_type: r.release_type,
+                        create_type: r.create_type,
+
+                        cat_number: r.cat_number,
+                        moods: r.moods,
+
+                        genre_id: r.genre_id,
+                        subgenre_id: r.subgenre_id,
+
+                        is_upc: r.is_upc,
+                        upc_number: r.upc_number,
+
+                        release_date: r.release_date
+                            ? new Date(r.release_date)
+                            : null,
+
+                        p_line: r.p_line,
+                        p_line_year: r.p_line_year,
+
+                        isrc: r.isrc,
+
+                        c_line: r.c_line,
+                        c_line_year: r.c_line_year,
+
+                        description: r.description,
+
+                        on_itunes: r.on_itunes,
+
+                        created_by: r.created_by,
+                        status: r.status,
+                        deleted: r.deleted,
+
+                        published_date: r.published_date
+                            ? new Date(r.published_date)
+                            : null
+                    }));
+
+                    // Insert in chunks
+                    const chunkSize = 1000;
+                    for (let i = 0; i < formattedReleases.length; i += chunkSize) {
+                        const chunk = formattedReleases.slice(i, i + chunkSize);
+                        try {
+                            await Release.insertMany(chunk, { ordered: false });
+                            console.log(`Inserted ${chunk.length} releases`);
+                        } catch (err) {
+                            console.log(" InsertMany error:", err.message);
+                        }
+                    }
+
+                    console.log(" All releases inserted successfully");
+
+                } catch (err) {
+                    console.log(" Release background insert error:", err.message);
+                }
+            });
+
+        } catch (err) {
+            res.status(500).json({
+                success: false,
+                message: "Something went wrong",
+                error: err.message
+            });
+        }
+    }
+
+
+    async insertTracksFromAPI(req, res) {
+        try {
+            res.status(200).json({
+                success: true,
+                message: "Track import received. Inserting in background...",
+            });
+
+            setImmediate(async () => {
+                try {
+                    const apiResponse = await axios.get(
+                        "https://beta.content.rdcmedia.in/api/tracks?per_page=all",
+                        {
+                            headers: {
+                                Accept: "application/json",
+                                "X-API-TOKEN": "WXdaOTRyZk9PbVF0MkdxYWVEMVNBVk03WDVYZmdRWTQxVzRvdnlrZw==",
+                            },
+                        }
+                    );
+
+                    let tracks = [];
+
+                    if (Array.isArray(apiResponse.data)) {
+                        tracks = apiResponse.data;
+                    } else if (apiResponse.data?.data) {
+                        tracks = apiResponse.data.data;
+                    }
+
+                    console.log(` Total tracks fetched: ${tracks.length}`);
+
+                    const formattedTracks = tracks.map(t => ({
+                        id: t.id,
+                        release_id: t.release_id || null,
+                        serial_number: t.serial_number || null,
+                        position: t.position || null,
+                        disc: t.disc || null,
+
+                        crbt_time: t.crbt_time || null,
+                        crbt_seconds_total: Number(t.crbt_seconds_total || 0),
+
+                        artists: t.artists
+                            ? t.artists.toString().split(",").map(Number)
+                            : [],
+
+                        display_artist: t.display_artist
+                            ? t.display_artist.split(",").map(a => a.trim())
+                            : [],
+
+                        feature_artist: t.feature_artist
+                            ? t.feature_artist.split(",").map(a => a.trim())
+                            : [],
+
+                        title: t.title || null,
+
+                        mix_version: t.mix_version || null,
+                        remixer: t.remixer || null,
+                        is_remix: t.is_remix || 0,
+
+                        orchestra: t.orchestra || null,
+                        arranger: t.arranger || null,
+                        actor: t.actor || null,
+                        conductor: t.conductor || null,
+                        composer: t.composer || null,
+                        producer: t.producer || null,
+                        lyricist: t.lyricist || null,
+
+                        genre_id: t.genre_id || null,
+                        subgenre_id: t.subgenre_id || null,
+
+                        publisher: t.publisher || null,
+                        contributors: t.contributors || null,
+
+                        have_isrc: t.have_isrc || 0,
+                        isrc_number: t.isrc_number || null,
+
+                        is_dolby: t.is_dolby || 0,
+                        dolby_isrc: t.dolby_isrc || null,
+                        dolby_audio: t.dolby_audio || null,
+
+                        track_lyrics: t.track_lyrics || null,
+                        lyrics_text: t.lyrics_text || null,
+
+                        sold_with_album: t.sold_with_album || 0,
+                        explicit: t.explicit || 0,
+
+                        start_time: t.start_time || null,
+                        end_time: t.end_time || null,
+
+                        price: t.price || null,
+
+                        audio_files: (() => {
+                            try {
+                                return typeof t.audio_files === "string"
+                                    ? JSON.parse(t.audio_files)
+                                    : [];
+                            } catch {
+                                return [];
+                            }
+                        })(),
+
+                        crbt_clip: t.crbt_clip || null,
+                        original_audio_name: t.original_audio_name || null,
+
+                        duration: t.duration || null,
+                    }));
+
+                    const chunkSize = 1000;
+
+                    for (let i = 0; i < formattedTracks.length; i += chunkSize) {
+                        const chunk = formattedTracks.slice(i, i + chunkSize);
+                        try {
+                            await Track.insertMany(chunk, { ordered: false });
+                            console.log(`Inserted ${chunk.length} tracks`);
+                        } catch (err) {
+                            console.log(" Track insert error:", err.message);
+                        }
+                    }
+
+                    console.log(" All tracks inserted successfully");
+                } catch (err) {
+                    console.log("Track background insert error:", err.message);
+                }
+            });
+        } catch (err) {
+            res.status(500).json({
+                success: false,
+                message: "Something went wrong",
+                error: err.message,
+            });
+        }
+    }
+
 
 }
 
