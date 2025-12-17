@@ -83,6 +83,8 @@ router.get('/youtubeRevenueReport', authMiddleware, revenueController.getYoutube
 router.get('/revenueReports/export/audioStreamingExcel', authMiddleware, revenueController.downloadAudioStreamingExcelReport);
 router.get('/revenueReports/export/youtubeExcel', authMiddleware, revenueController.downloadYoutubeExcelReport);
 router.delete('/deleteRevenueByUserId', authMiddleware, revenueController.deleteRevenueByUserId);
+router.get('/report-history', authMiddleware, revenueController.getReportHistory);
+router.get('/youtube-report-history', authMiddleware, revenueController.getYoutubeReportHistory);
 
 
 

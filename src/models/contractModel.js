@@ -15,11 +15,11 @@ const ContractSchema = new mongoose.Schema({
         default: ""
     },
     startDate: {
-        type: Date,
-        required: true,
+         type: String,
+        required: true
     },
     endDate: {
-        type: Date,
+        type: String,
         required: true,
     },
     // artistPercentage: {

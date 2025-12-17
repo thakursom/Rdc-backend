@@ -1,6 +1,12 @@
 const mongoose = require("mongoose");
 
 const TrackSchema = new mongoose.Schema({
+    id: {
+        type: Number,
+        required: true,
+        unique: true,
+        index: true
+    },
     release_id: {
         type: Number,
         default: null

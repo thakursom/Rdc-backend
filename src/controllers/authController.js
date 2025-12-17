@@ -401,6 +401,7 @@ class AuthController {
                     console.log(`Total releases fetched: ${releases.length}`);
 
                     const formattedReleases = releases.map(r => ({
+                        id: r.id,
                         sublabel_id: r.sublabel_id,
                         label_id: Number(r.label_id) || null,
 

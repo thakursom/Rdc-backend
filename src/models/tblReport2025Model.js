@@ -79,6 +79,12 @@ const TblReport2025Schema = new mongoose.Schema({
         type: String,
         default: null
     },
+    percentage: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 100
+    },
     net_total: {
         type: String,
         default: null
