@@ -2,10 +2,12 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const cron = require('node-cron');
 
 const connectDB = require("./src/config/db");
 const routes = require("./src/routes/route");
 const errorHandler = require("./src/middlewares/errorHandler");
+const revenueUploadController = require('./src/controllers/revenueUploadController');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -42,6 +44,18 @@ app.use(
     "/uploads/reports",
     express.static(path.join(__dirname, "src/uploads/reports"))
 );
+
+// Schedule cron job
+cron.schedule('*/30 * * * *', async () => {
+    console.log('Running cron job to process all pending reports...');
+
+    try {
+        // Process all pending reports (both audio and YouTube)
+        await revenueUploadController.processAllPendingReports();
+    } catch (error) {
+        console.error('Error in cron job execution:', error);
+    }
+});
 
 // Routes
 app.get("/", (req, res) => {

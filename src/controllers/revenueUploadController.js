@@ -29,7 +29,13 @@ const YoutubeReportHistory = require("../models/youtubeReportHistoryModel");
 
 class revenueUploadController {
 
-    constructor() { }
+    constructor() {
+
+        this.processPendingReports = this.processPendingReports.bind(this);
+        this.processAudioStreamingReport = this.processAudioStreamingReport.bind(this);
+        this.processPendingYoutubeReports = this.processPendingYoutubeReports.bind(this);
+        this.processYoutubeReport = this.processYoutubeReport.bind(this);
+    }
 
 
     //uploadRevenue method
@@ -685,6 +691,7 @@ class revenueUploadController {
     async getAudioStreamingRevenueReport(req, res, next) {
         try {
             const {
+                labelId,
                 platform,
                 year,
                 month,
@@ -714,6 +721,10 @@ class revenueUploadController {
 
             // -------- BUILD FILTER --------
             const filter = {};
+
+            if (labelId) {
+                filter.user_id = Number(labelId);
+            }
 
             if (platform && platform !== "") {
                 const platforms = platform.split(",").map(p => p.trim());
@@ -949,11 +960,11 @@ class revenueUploadController {
             }
 
             // Format revenueByChannel object with default retailers
-            const revenueByChannel = {};
-            defaultRetailers.forEach(platform => {
-                const found = byChannelResult.find(item => item.platform === platform);
-                revenueByChannel[platform] = found ? found.revenue : 0;
-            });
+            // const revenueByChannel = {};
+            // defaultRetailers.forEach(platform => {
+            //     const found = byChannelResult.find(item => item.platform === platform);
+            //     revenueByChannel[platform] = found ? found.revenue : 0;
+            // });
 
             // Format response
             res.json({
@@ -977,7 +988,9 @@ class revenueUploadController {
                     revenueByMonth: Object.fromEntries(
                         byMonthResult.map(item => [item.monthLabel, item.revenue])
                     ),
-                    revenueByChannel,
+                    revenueByChannel: Object.fromEntries(
+                        byChannelResult.map(item => [item.platform || "Unknown", item.revenue])
+                    ),
                     revenueByCountry: Object.fromEntries(
                         byCountryResult.map(item => [item.country || "Unknown", item.revenue])
                     )
@@ -994,6 +1007,7 @@ class revenueUploadController {
     async getYoutubeRevenueReport(req, res, next) {
         try {
             const {
+                labelId,
                 platform,
                 year,
                 month,
@@ -1022,6 +1036,10 @@ class revenueUploadController {
 
             // -------- BUILD FILTER --------
             const filter = {};
+
+            if (labelId) {
+                filter.user_id = Number(labelId);
+            }
 
             if (platform && platform !== "") {
                 const platforms = platform.split(",").map(p => p.trim());
@@ -1265,11 +1283,11 @@ class revenueUploadController {
             }
 
             // Format revenueByChannel object with default retailers
-            const revenueByChannel = {};
-            defaultRetailers.forEach(platform => {
-                const found = byChannelResult.find(item => item.platform === platform);
-                revenueByChannel[platform] = found ? found.revenue : 0;
-            });
+            // const revenueByChannel = {};
+            // defaultRetailers.forEach(platform => {
+            //     const found = byChannelResult.find(item => item.platform === platform);
+            //     revenueByChannel[platform] = found ? found.revenue : 0;
+            // });
 
             // Format response
             res.json({
@@ -1293,7 +1311,9 @@ class revenueUploadController {
                     revenueByMonth: Object.fromEntries(
                         byMonthResult.map(item => [item.monthLabel, item.revenue])
                     ),
-                    revenueByChannel,
+                    revenueByChannel: Object.fromEntries(
+                        byChannelResult.map(item => [item.platform || "Unknown", item.revenue])
+                    ),
                     revenueByCountry: Object.fromEntries(
                         byCountryResult.map(item => [item.country || "Unknown", item.revenue])
                     )
@@ -1307,10 +1327,52 @@ class revenueUploadController {
     }
 
     // downloadExcelReport method
-    async downloadAudioStreamingExcelReport(req, res, next) {
-        let reportId = null;
-
+    async triggerAudioStreamingExcelReport(req, res, next) {
         try {
+            const existingReport = await AudioStreamingReportHistory.findOne({
+                'filters': req.query,
+                status: 'preparing'
+            });
+
+            if (existingReport) {
+                return res.status(200).json({
+                    success: true,
+                    message: "Report is already being prepared",
+                    reportId: existingReport._id
+                });
+            }
+
+            // Create report with "preparing" status
+            const newReport = new AudioStreamingReportHistory({
+                filters: req.query,
+                status: 'preparing',
+                generatedAt: new Date(),
+                filename: 'Generating...'
+            });
+
+            await newReport.save();
+
+            return res.status(200).json({
+                success: true,
+                message: "Report generation started",
+                reportId: newReport._id
+            });
+
+        } catch (error) {
+            console.error("Error triggering report:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Error starting report generation",
+                error: error.message
+            });
+        }
+    }
+
+    // Separate function to process the report
+    async processAudioStreamingReport(reportId, filters) {
+        try {
+            console.log(`Processing report ${reportId} with filters:`, filters);
+
             const {
                 platform,
                 year,
@@ -1325,17 +1387,7 @@ class revenueUploadController {
                 format,
                 territory,
                 quarters
-            } = req.query;
-
-            const newReport = new AudioStreamingReportHistory({
-                filters: req.query,
-                status: 'preparing',
-                generatedAt: new Date()
-            });
-            await newReport.save();
-            reportId = newReport._id;
-
-            console.log(`Report generation started - ID: ${reportId}`);
+            } = filters;
 
             const defaultRetailers = [
                 "Apple Music",
@@ -1396,15 +1448,14 @@ class revenueUploadController {
                 .sort({ date: -1 })
                 .lean();
 
-            console.log(`Found ${data.length} records for export`);
+            console.log(`Found ${data.length} records for report ${reportId}`);
 
             if (data.length === 0) {
-                await AudioStreamingReportHistory.findByIdAndUpdate(reportId, { status: 'failed' });
-
-                return res.status(404).json({
-                    success: false,
-                    message: "No data found to export"
+                await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
+                    status: 'failed',
+                    error: 'No data found'
                 });
+                return;
             }
 
             const excelData = [];
@@ -1440,11 +1491,7 @@ class revenueUploadController {
             }
 
             const absoluteFilePath = path.join(absoluteFolder, filename);
-
-            // Only relative path stored in DB
             const relativePath = `uploads/reports/${filename}`;
-
-            // Full public URL using BASE_URL from .env
             const fileURL = `${process.env.BASE_URL}/${relativePath}`;
 
             const excelBuffer = XLSX.write(workbook, {
@@ -1455,7 +1502,7 @@ class revenueUploadController {
 
             // Save file to public folder
             fs.writeFileSync(absoluteFilePath, excelBuffer);
-            console.log(`Excel file saved at: ${absoluteFilePath}`);
+            console.log(`Excel file saved for report ${reportId} at: ${absoluteFilePath}`);
 
             // Update DB with relative path and public URL
             await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
@@ -1465,42 +1512,65 @@ class revenueUploadController {
                 fileURL: fileURL
             });
 
-            // === ORIGINAL INSTANT DOWNLOAD (unchanged) ===
-            res.writeHead(200, {
-                'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                'Content-Disposition': `attachment; filename="${filename}"`,
-                'Content-Length': excelBuffer.length,
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache',
-                'Expires': '0'
-            });
-
-            res.end(excelBuffer);
-            console.log('=== Excel file sent successfully to user ===');
+            console.log(`Report ${reportId} processed successfully`);
 
         } catch (error) {
-            console.error("Error in downloadExcelReport:", error);
+            console.error(`Error processing report ${reportId}:`, error);
 
-            if (reportId) {
-                await AudioStreamingReportHistory.findByIdAndUpdate(reportId, { status: 'failed' });
-            }
-
-            if (!res.headersSent) {
-                res.status(500).json({
-                    success: false,
-                    message: "Error generating Excel file",
-                    error: error.message
-                });
-            }
+            await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
+                status: 'failed',
+                error: error.message
+            });
         }
     }
 
-    // downloadYoutubeExcelReport method
-    async downloadYoutubeExcelReport(req, res, next) {
-
-        let reportId = null;
-
+    // Trigger YouTube report generation
+    async triggerYoutubeExcelReport(req, res, next) {
         try {
+            const existingReport = await YoutubeReportHistory.findOne({
+                'filters': req.query,
+                status: 'preparing'
+            });
+
+            if (existingReport) {
+                return res.status(200).json({
+                    success: true,
+                    message: "YouTube report is already being prepared",
+                    reportId: existingReport._id
+                });
+            }
+
+            // Create report with "preparing" status
+            const newReport = new YoutubeReportHistory({
+                filters: req.query,
+                status: 'preparing',
+                generatedAt: new Date(),
+                filename: 'Generating...'
+            });
+
+            await newReport.save();
+
+            return res.status(200).json({
+                success: true,
+                message: "YouTube report generation started",
+                reportId: newReport._id
+            });
+
+        } catch (error) {
+            console.error("Error triggering YouTube report:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Error starting YouTube report generation",
+                error: error.message
+            });
+        }
+    }
+
+    // Process YouTube report
+    async processYoutubeReport(reportId, filters) {
+        try {
+            console.log(`Processing YouTube report ${reportId} with filters:`, filters);
+
             const {
                 platform,
                 year,
@@ -1515,17 +1585,7 @@ class revenueUploadController {
                 format,
                 territory,
                 quarters
-            } = req.query;
-
-            const newReport = new YoutubeReportHistory({
-                filters: req.query,
-                status: 'preparing',
-                generatedAt: new Date()
-            });
-            await newReport.save();
-            reportId = newReport._id;
-
-            console.log(`Report generation started - ID: ${reportId}`);
+            } = filters;
 
             const defaultRetailers = [
                 "Sound Recording (Audio Claim)",
@@ -1585,15 +1645,14 @@ class revenueUploadController {
                 .sort({ date: -1 })
                 .lean();
 
-            console.log(`Found ${data.length} records for export`);
+            console.log(`Found ${data.length} records for YouTube report ${reportId}`);
 
             if (data.length === 0) {
-                await YoutubeReportHistory.findByIdAndUpdate(reportId, { status: 'failed' });
-
-                return res.status(404).json({
-                    success: false,
-                    message: "No data found to export"
+                await YoutubeReportHistory.findByIdAndUpdate(reportId, {
+                    status: 'failed',
+                    error: 'No data found'
                 });
+                return;
             }
 
             const excelData = [];
@@ -1616,10 +1675,10 @@ class revenueUploadController {
 
             const workbook = XLSX.utils.book_new();
             const worksheet = XLSX.utils.aoa_to_sheet(excelData);
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Revenue Report");
+            XLSX.utils.book_append_sheet(workbook, worksheet, "YouTube Revenue Report");
 
             const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
-            const filename = `Revenue_Report_${timestamp}_${reportId}.xlsx`;
+            const filename = `YouTube_Revenue_Report_${timestamp}_${reportId}.xlsx`;
 
             const relativeFolder = 'reports';
             const absoluteFolder = path.join(__dirname, '../uploads', relativeFolder);
@@ -1629,11 +1688,7 @@ class revenueUploadController {
             }
 
             const absoluteFilePath = path.join(absoluteFolder, filename);
-
-            // Only relative path stored in DB
             const relativePath = `uploads/reports/${filename}`;
-
-            // Full public URL using BASE_URL from .env
             const fileURL = `${process.env.BASE_URL}/${relativePath}`;
 
             const excelBuffer = XLSX.write(workbook, {
@@ -1644,7 +1699,7 @@ class revenueUploadController {
 
             // Save file to public folder
             fs.writeFileSync(absoluteFilePath, excelBuffer);
-            console.log(`Excel file saved at: ${absoluteFilePath}`);
+            console.log(`YouTube Excel file saved for report ${reportId} at: ${absoluteFilePath}`);
 
             // Update DB with relative path and public URL
             await YoutubeReportHistory.findByIdAndUpdate(reportId, {
@@ -1654,33 +1709,88 @@ class revenueUploadController {
                 fileURL: fileURL
             });
 
-            // === ORIGINAL INSTANT DOWNLOAD (unchanged) ===
-            res.writeHead(200, {
-                'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                'Content-Disposition': `attachment; filename="${filename}"`,
-                'Content-Length': excelBuffer.length,
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache',
-                'Expires': '0'
-            });
-
-            res.end(excelBuffer);
-            console.log('=== Excel file sent successfully to user ===');
+            console.log(`YouTube report ${reportId} processed successfully`);
 
         } catch (error) {
-            console.error("Error in downloadExcelReport:", error);
+            console.error(`Error processing YouTube report ${reportId}:`, error);
 
-            if (reportId) {
-                await YoutubeReportHistory.findByIdAndUpdate(reportId, { status: 'failed' });
-            }
+            await YoutubeReportHistory.findByIdAndUpdate(reportId, {
+                status: 'failed',
+                error: error.message
+            });
+        }
+    }
 
-            if (!res.headersSent) {
-                res.status(500).json({
-                    success: false,
-                    message: "Error generating Excel file",
-                    error: error.message
-                });
+    // Process pending audio streaming reports
+    async processPendingReports() {
+        try {
+            const pendingReports = await AudioStreamingReportHistory.find({
+                status: 'preparing'
+            });
+
+            console.log(`Found ${pendingReports.length} pending audio reports to process`);
+
+            for (const report of pendingReports) {
+                const reportAge = Date.now() - new Date(report.generatedAt).getTime();
+                const THIRTY_MINUTES = 30 * 60 * 1000;
+
+                if (reportAge > THIRTY_MINUTES) {
+                    await AudioStreamingReportHistory.findByIdAndUpdate(report._id, {
+                        status: 'failed',
+                        error: 'Processing timeout'
+                    });
+                    continue;
+                }
+
+                await this.processAudioStreamingReport(report._id, report.filters);
             }
+        } catch (error) {
+            console.error("Error in processPendingReports cron job:", error);
+        }
+    }
+
+    // Process pending YouTube reports
+    async processPendingYoutubeReports() {
+        try {
+            const pendingReports = await YoutubeReportHistory.find({
+                status: 'preparing'
+            });
+
+            console.log(`Found ${pendingReports.length} pending YouTube reports to process`);
+
+            for (const report of pendingReports) {
+                const reportAge = Date.now() - new Date(report.generatedAt).getTime();
+                const THIRTY_MINUTES = 30 * 60 * 1000;
+
+                if (reportAge > THIRTY_MINUTES) {
+                    await YoutubeReportHistory.findByIdAndUpdate(report._id, {
+                        status: 'failed',
+                        error: 'Processing timeout'
+                    });
+                    continue;
+                }
+
+                await this.processYoutubeReport(report._id, report.filters);
+            }
+        } catch (error) {
+            console.error("Error in processPendingYoutubeReports cron job:", error);
+        }
+    }
+
+    // Combined cron job to process all pending reports
+    async processAllPendingReports() {
+        try {
+            console.log('Processing all pending reports...');
+
+            // Process audio streaming reports
+            await this.processPendingReports();
+
+            // Process YouTube reports
+            await this.processPendingYoutubeReports();
+
+            console.log('All pending reports processed');
+        } catch (error) {
+            console.error("Error in processAllPendingReports:", error);
         }
     }
 
@@ -1752,6 +1862,59 @@ class revenueUploadController {
         }
     }
 
+    //deleteReportHistory method
+    async deleteReportHistory(req, res, next) {
+        try {
+            const { id } = req.query;
+
+            if (!id) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Report ID is required"
+                });
+            }
+
+            const report = await AudioStreamingReportHistory.findById(id);
+
+            if (!report) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Report not found"
+                });
+            }
+
+            let fileDeleted = false;
+
+            if (report.filePath) {
+                // 🔑 FORCE src BASE
+                const absolutePath = path.resolve(
+                    process.cwd(),
+                    'src',
+                    report.filePath.replace(/^src[\\/]/, '')
+                );
+
+                console.log("Deleting file:", absolutePath);
+
+                if (fs.existsSync(absolutePath)) {
+                    fs.unlinkSync(absolutePath);
+                    fileDeleted = true;
+                }
+            }
+
+            await AudioStreamingReportHistory.findByIdAndDelete(id);
+
+            return res.json({
+                success: true,
+                message: "Report and file deleted successfully",
+                fileDeleted
+            });
+
+        } catch (error) {
+            console.error("Delete error:", error);
+            next(error);
+        }
+    }
+
     //getYoutubeReportHistory method
     async getYoutubeReportHistory(req, res, next) {
         try {
@@ -1774,6 +1937,59 @@ class revenueUploadController {
                 message: "Failed to fetch report history",
                 error: error.message
             });
+        }
+    }
+
+    //deleteYoutubeReportHistory method
+    async deleteYoutubeReportHistory(req, res, next) {
+        try {
+            const { id } = req.query;
+
+            if (!id) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Report ID is required"
+                });
+            }
+
+            const report = await YoutubeReportHistory.findById(id);
+
+            if (!report) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Report not found"
+                });
+            }
+
+            let fileDeleted = false;
+
+            if (report.filePath) {
+                // 🔑 FORCE src BASE
+                const absolutePath = path.resolve(
+                    process.cwd(),
+                    'src',
+                    report.filePath.replace(/^src[\\/]/, '')
+                );
+
+                console.log("Deleting file:", absolutePath);
+
+                if (fs.existsSync(absolutePath)) {
+                    fs.unlinkSync(absolutePath);
+                    fileDeleted = true;
+                }
+            }
+
+            await YoutubeReportHistory.findByIdAndDelete(id);
+
+            return res.json({
+                success: true,
+                message: "Report and file deleted successfully",
+                fileDeleted
+            });
+
+        } catch (error) {
+            console.error("Delete error:", error);
+            next(error);
         }
     }
 
