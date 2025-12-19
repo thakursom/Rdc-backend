@@ -32,7 +32,7 @@ class LogController {
 
             const skip = (page - 1) * limit;
 
-            // Fetch logs
+            // Fetch logss
             const logs = await Log.find(filter)
                 .sort({ createdAt: -1 }) // latest first
                 .skip(skip)
