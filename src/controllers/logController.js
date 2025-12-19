@@ -1,3 +1,4 @@
+const User = require("../models/userModel");
 const Log = require("../models/logModel");
 
 class LogController {
@@ -5,13 +6,20 @@ class LogController {
 
     async getAllLogs(req, res, next) {
         try {
+            const { role, userId } = req.user;
             let { page = 1, limit = 10, search = "" } = req.query;
 
             page = parseInt(page);
             limit = parseInt(limit);
 
-            // Build search filter (optional)
             const filter = {};
+
+            if (role !== "Super Admin" && role !== "Manager") {
+                const users = await User.find({ parent_id: userId }, { id: 1 });
+                const childIds = users.map(u => u.id);
+                // childIds.push(userId);
+                filter.user_id = { $in: childIds };
+            }
 
             if (search) {
                 filter.$or = [
