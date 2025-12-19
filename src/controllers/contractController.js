@@ -278,7 +278,7 @@ class contractController {
             if (role !== "Super Admin" && role !== "Manager") {
                 const users = await User.find({ parent_id: userId }, { id: 1 });
                 const childIds = users.map(u => u.id);
-
+                // childIds.push(userId);
                 matchQuery.user_id = { $in: childIds };
             }
 

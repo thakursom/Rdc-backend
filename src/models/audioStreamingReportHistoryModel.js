@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const audioStreamingReportHistorySchema = new mongoose.Schema({
+    user_id: {
+        type: Number,
+        ref: "User",
+        default: null
+    },
     filters: {
         type: Object,
         required: true

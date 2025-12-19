@@ -3,6 +3,7 @@ const path = require('path');
 const XLSX = require("xlsx");
 
 const LogService = require("../services/logService");
+const User = require("../models/userModel");
 const RevenueUpload = require("../models/RevenueUploadModel");
 const AppleRevenue = require("../models/AppleRevenueModel");
 const SpotifyRevenue = require("../models/SpotifyRevenueModel");
@@ -709,6 +710,20 @@ class revenueUploadController {
                 limit = 10,
             } = req.query;
 
+            const { role, userId } = req.user;
+
+            const userFilter = {};
+
+            if (userId && role) {
+                if (role !== "Super Admin" && role !== "Manager") {
+                    // For non-Super Admin/Manager users, get child users
+                    const users = await User.find({ parent_id: userId }, { id: 1 });
+                    const childIds = users.map(u => u.id);
+                    childIds.push(userId);
+                    userFilter.user_id = { $in: childIds };
+                }
+            }
+
             const defaultRetailers = [
                 "Apple Music",
                 "Spotify",
@@ -720,7 +735,7 @@ class revenueUploadController {
             ];
 
             // -------- BUILD FILTER --------
-            const filter = {};
+            const filter = { ...userFilter };
 
             if (labelId) {
                 filter.user_id = Number(labelId);
@@ -1025,6 +1040,20 @@ class revenueUploadController {
                 limit = 10,
             } = req.query;
 
+            const { role, userId } = req.user;
+
+            const userFilter = {};
+
+            if (userId && role) {
+                if (role !== "Super Admin" && role !== "Manager") {
+                    // For non-Super Admin/Manager users, get child users
+                    const users = await User.find({ parent_id: userId }, { id: 1 });
+                    const childIds = users.map(u => u.id);
+                    childIds.push(userId);
+                    userFilter.user_id = { $in: childIds };
+                }
+            }
+
             const defaultRetailers = [
                 "Sound Recording (Audio Claim)",
                 "Art Track (YouTube Music)",
@@ -1035,7 +1064,7 @@ class revenueUploadController {
             ];
 
             // -------- BUILD FILTER --------
-            const filter = {};
+            const filter = { ...userFilter };
 
             if (labelId) {
                 filter.user_id = Number(labelId);
@@ -1329,6 +1358,8 @@ class revenueUploadController {
     // downloadExcelReport method
     async triggerAudioStreamingExcelReport(req, res, next) {
         try {
+            const { userId } = req.user;
+
             const existingReport = await AudioStreamingReportHistory.findOne({
                 'filters': req.query,
                 status: 'pending'
@@ -1344,6 +1375,7 @@ class revenueUploadController {
 
             // Create report with "pending" status
             const newReport = new AudioStreamingReportHistory({
+                user_id: userId,
                 filters: req.query,
                 status: 'pending',
                 generatedAt: new Date(),
@@ -1374,6 +1406,7 @@ class revenueUploadController {
             console.log(`Processing report ${reportId} with filters:`, filters);
 
             const {
+                labelId,
                 platform,
                 year,
                 month,
@@ -1400,6 +1433,10 @@ class revenueUploadController {
             ];
 
             const filter = {};
+
+            if (labelId) {
+                filter.user_id = Number(labelId);
+            }
 
             if (platform && platform !== "") {
                 const platforms = platform.split(",").map(p => p.trim());
@@ -1527,6 +1564,8 @@ class revenueUploadController {
     // Trigger YouTube report generation
     async triggerYoutubeExcelReport(req, res, next) {
         try {
+            const { userId } = req.user;
+
             const existingReport = await YoutubeReportHistory.findOne({
                 'filters': req.query,
                 status: 'pending'
@@ -1542,6 +1581,7 @@ class revenueUploadController {
 
             // Create report with "pending" status
             const newReport = new YoutubeReportHistory({
+                user_id: userId,
                 filters: req.query,
                 status: 'pending',
                 generatedAt: new Date(),
@@ -1572,6 +1612,7 @@ class revenueUploadController {
             console.log(`Processing YouTube report ${reportId} with filters:`, filters);
 
             const {
+                labelId,
                 platform,
                 year,
                 month,
@@ -1597,6 +1638,10 @@ class revenueUploadController {
             ];
 
             const filter = {};
+
+            if (labelId) {
+                filter.user_id = Number(labelId);
+            }
 
             if (platform && platform !== "") {
                 const platforms = platform.split(",").map(p => p.trim());
@@ -1840,8 +1885,15 @@ class revenueUploadController {
     //getReportHistory method
     async getReportHistory(req, res, next) {
         try {
-            const reports = await AudioStreamingReportHistory.find({})
-                .select('filename filePath fileURL status generatedAt')
+            const { role, userId } = req.user;
+
+            const query = {};
+
+            if (role !== "Super Admin" && role !== "Manager") {
+                query.user_id = userId;
+            }
+            const reports = await AudioStreamingReportHistory.find(query)
+                .select('filename filePath fileURL status generatedAt user_id')
                 .sort({ generatedAt: -1 })
                 .lean();
 
@@ -1918,7 +1970,14 @@ class revenueUploadController {
     //getYoutubeReportHistory method
     async getYoutubeReportHistory(req, res, next) {
         try {
-            const reports = await YoutubeReportHistory.find({})
+            const { role, userId } = req.user;
+
+            const query = {};
+
+            if (role !== "Super Admin" && role !== "Manager") {
+                query.user_id = userId;
+            }
+            const reports = await YoutubeReportHistory.find(query)
                 .select('filename filePath fileURL status generatedAt')
                 .sort({ generatedAt: -1 })
                 .lean();
