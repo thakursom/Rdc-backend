@@ -1406,6 +1406,8 @@ class revenueUploadController {
             console.log(`Processing report ${reportId} with filters:`, filters);
 
             const {
+                userId,
+                role,
                 labelId,
                 platform,
                 year,
@@ -1422,6 +1424,18 @@ class revenueUploadController {
                 quarters
             } = filters;
 
+            const userFilter = {};
+
+            if (userId && role) {
+                if (role !== "Super Admin" && role !== "Manager") {
+                    // For non-Super Admin/Manager users, get child users
+                    const users = await User.find({ parent_id: userId }, { id: 1 });
+                    const childIds = users.map(u => u.id);
+                    childIds.push(userId);
+                    userFilter.user_id = { $in: childIds };
+                }
+            }
+
             const defaultRetailers = [
                 "Apple Music",
                 "Spotify",
@@ -1432,7 +1446,7 @@ class revenueUploadController {
                 "TikTok"
             ];
 
-            const filter = {};
+            const filter = { ...userFilter };
 
             if (labelId) {
                 filter.user_id = Number(labelId);
@@ -1612,6 +1626,8 @@ class revenueUploadController {
             console.log(`Processing YouTube report ${reportId} with filters:`, filters);
 
             const {
+                userId,
+                role,
                 labelId,
                 platform,
                 year,
@@ -1628,6 +1644,18 @@ class revenueUploadController {
                 quarters
             } = filters;
 
+            const userFilter = {};
+
+            if (userId && role) {
+                if (role !== "Super Admin" && role !== "Manager") {
+                    // For non-Super Admin/Manager users, get child users
+                    const users = await User.find({ parent_id: userId }, { id: 1 });
+                    const childIds = users.map(u => u.id);
+                    childIds.push(userId);
+                    userFilter.user_id = { $in: childIds };
+                }
+            }
+
             const defaultRetailers = [
                 "Sound Recording (Audio Claim)",
                 "Art Track (YouTube Music)",
@@ -1637,7 +1665,7 @@ class revenueUploadController {
                 "YTPremiumRevenue",
             ];
 
-            const filter = {};
+            const filter = { ...userFilter };
 
             if (labelId) {
                 filter.user_id = Number(labelId);
