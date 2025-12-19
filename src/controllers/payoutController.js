@@ -1,4 +1,5 @@
 const XLSX = require("xlsx");
+const User = require("../models/userModel");
 const PaymentHistory = require("../models/paymentHistoryModel");
 const LogService = require("../services/logService");
 
@@ -86,6 +87,7 @@ class payoutController {
     // getAllPayouts method
     async getAllPayouts(req, res, next) {
         try {
+            const { role, userId } = req.user;
             let { page = 1, limit = 10, search = "" } = req.query;
 
             page = Number(page);
@@ -93,7 +95,14 @@ class payoutController {
 
             let query = {};
 
-            // 🔍 Search filter
+            if (role !== "Super Admin" && role !== "Manager") {
+                const users = await User.find({ parent_id: userId }, { id: 1 });
+                const childIds = users.map(u => u.id);
+                // childIds.push(userId);
+                query.user_id = { $in: childIds };
+            }
+
+            // Search filter
             if (search) {
                 query.$or = [
                     { paymentMethod: { $regex: search, $options: "i" } },
