@@ -1331,7 +1331,7 @@ class revenueUploadController {
         try {
             const existingReport = await AudioStreamingReportHistory.findOne({
                 'filters': req.query,
-                status: 'preparing'
+                status: 'pending'
             });
 
             if (existingReport) {
@@ -1342,10 +1342,10 @@ class revenueUploadController {
                 });
             }
 
-            // Create report with "preparing" status
+            // Create report with "pending" status
             const newReport = new AudioStreamingReportHistory({
                 filters: req.query,
-                status: 'preparing',
+                status: 'pending',
                 generatedAt: new Date(),
                 filename: 'Generating...'
             });
@@ -1529,7 +1529,7 @@ class revenueUploadController {
         try {
             const existingReport = await YoutubeReportHistory.findOne({
                 'filters': req.query,
-                status: 'preparing'
+                status: 'pending'
             });
 
             if (existingReport) {
@@ -1540,10 +1540,10 @@ class revenueUploadController {
                 });
             }
 
-            // Create report with "preparing" status
+            // Create report with "pending" status
             const newReport = new YoutubeReportHistory({
                 filters: req.query,
-                status: 'preparing',
+                status: 'pending',
                 generatedAt: new Date(),
                 filename: 'Generating...'
             });
@@ -1725,7 +1725,7 @@ class revenueUploadController {
     async processPendingReports() {
         try {
             const pendingReports = await AudioStreamingReportHistory.find({
-                status: 'preparing'
+                status: 'pending'
             });
 
             console.log(`Found ${pendingReports.length} pending audio reports to process`);
@@ -1753,7 +1753,7 @@ class revenueUploadController {
     async processPendingYoutubeReports() {
         try {
             const pendingReports = await YoutubeReportHistory.find({
-                status: 'preparing'
+                status: 'pending'
             });
 
             console.log(`Found ${pendingReports.length} pending YouTube reports to process`);

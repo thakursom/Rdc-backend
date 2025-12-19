@@ -7,8 +7,8 @@ const audioStreamingReportHistorySchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['preparing', 'ready', 'failed'],
-        default: 'preparing'
+        enum: ['pending', 'ready', 'failed'],
+        default: 'pending'
     },
     filename: {
         type: String
