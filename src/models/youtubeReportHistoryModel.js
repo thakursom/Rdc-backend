@@ -12,7 +12,7 @@ const youtubeReportHistorySchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'ready', 'failed'],
+        enum: ['pending', 'generate', 'generating', 'ready', 'failed'],
         default: 'pending'
     },
     filename: {

@@ -1797,15 +1797,37 @@ class revenueUploadController {
     // Process pending audio streaming reports
     async processPendingReports() {
         try {
-            const pendingReports = await AudioStreamingReportHistory.find({
-                status: 'pending'
+            const existingGenerate = await AudioStreamingReportHistory.exists({
+                status: { $in: ['generate', 'generating'] }
             });
 
-            console.log(`Found ${pendingReports.length} pending audio reports to process`);
+            if (existingGenerate) {
+                console.log('Generate process already in progress. Skipping pending updates.');
+                return;
+            }
 
-            for (const report of pendingReports) {
-                const reportAge = Date.now() - new Date(report.generatedAt).getTime();
+            const updatedReports = await AudioStreamingReportHistory.updateMany(
+                { status: 'pending' },
+                {
+                    $set: {
+                        status: 'generate',
+                        filename: 'Preparing to generate...'
+                    }
+                }
+            );
+
+            console.log(`Updated ${updatedReports.modifiedCount} reports from pending to generate`);
+
+            const generateReports = await AudioStreamingReportHistory.find({
+                status: 'generate'
+            }).sort({ generatedAt: 1 });
+
+            console.log(`Found ${generateReports.length} pending Audio reports to process`);
+
+            for (const report of generateReports) {
                 const THIRTY_MINUTES = 30 * 60 * 1000;
+                const reportAge =
+                    Date.now() - new Date(report.generatedAt).getTime();
 
                 if (reportAge > THIRTY_MINUTES) {
                     await AudioStreamingReportHistory.findByIdAndUpdate(report._id, {
@@ -1815,25 +1837,60 @@ class revenueUploadController {
                     continue;
                 }
 
+                const lockedReport = await AudioStreamingReportHistory.findOneAndUpdate(
+                    { _id: report._id, status: 'generate' },
+                    {
+                        $set: {
+                            status: 'generating',
+                            filename: 'Generating report...',
+                            processingStartedAt: new Date()
+                        }
+                    },
+                    { new: true }
+                );
+
+                if (!lockedReport) continue;
+
                 await this.processAudioStreamingReport(report._id, report.filters);
             }
         } catch (error) {
-            console.error("Error in processPendingReports cron job:", error);
+            console.error('Error in processPendingReports cron job:', error);
         }
     }
 
     // Process pending YouTube reports
     async processPendingYoutubeReports() {
         try {
-            const pendingReports = await YoutubeReportHistory.find({
-                status: 'pending'
+            const existingGenerate = await YoutubeReportHistory.exists({
+                status: { $in: ['generate', 'generating'] }
             });
 
-            console.log(`Found ${pendingReports.length} pending YouTube reports to process`);
+            if (existingGenerate) {
+                console.log('Generate process already in progress. Skipping pending updates.');
+                return;
+            }
 
-            for (const report of pendingReports) {
-                const reportAge = Date.now() - new Date(report.generatedAt).getTime();
+            const updatedReports = await YoutubeReportHistory.updateMany(
+                { status: 'pending' },
+                {
+                    $set: {
+                        status: 'generate',
+                        filename: 'Preparing to generate...'
+                    }
+                }
+            );
+
+            console.log(`Updated ${updatedReports.modifiedCount} youtube reports from pending to generate`);
+
+            const generateReports = await YoutubeReportHistory.find({
+                status: 'generate'
+            }).sort({ generatedAt: 1 });
+
+            console.log(`Found ${generateReports.length} pending YouTube reports to process`);
+
+            for (const report of generateReports) {
                 const THIRTY_MINUTES = 30 * 60 * 1000;
+                const reportAge = Date.now() - new Date(report.generatedAt).getTime();
 
                 if (reportAge > THIRTY_MINUTES) {
                     await YoutubeReportHistory.findByIdAndUpdate(report._id, {
@@ -1843,10 +1900,24 @@ class revenueUploadController {
                     continue;
                 }
 
+                const lockedReport = await YoutubeReportHistory.findOneAndUpdate(
+                    { _id: report._id, status: 'generate' },
+                    {
+                        $set: {
+                            status: 'generating',
+                            filename: 'Generating report...',
+                            processingStartedAt: new Date()
+                        }
+                    },
+                    { new: true }
+                );
+
+                if (!lockedReport) continue;
+
                 await this.processYoutubeReport(report._id, report.filters);
             }
         } catch (error) {
-            console.error("Error in processPendingYoutubeReports cron job:", error);
+            console.error('Error in processPendingYoutubeReports cron job:', error);
         }
     }
 
