@@ -97,5 +97,8 @@ router.post("/uploadBulkPayout", authMiddleware, upload.single("file"), payoutCo
 //Log Apis
 router.get("/getAllLogs", authMiddleware, logController.getAllLogs);
 
+router.post('/import-revenue-json', revenueController.importRevenueFromJson);
+
+
 
 module.exports = router;

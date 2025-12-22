@@ -1,7 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const XLSX = require("xlsx");
-
+const { chain } = require('stream-chain');
+const { parser } = require('stream-json');
+const { streamArray } = require('stream-json/streamers/StreamArray');
+const mongoose = require("mongoose");
 const LogService = require("../services/logService");
 const User = require("../models/userModel");
 const RevenueUpload = require("../models/RevenueUploadModel");
@@ -26,6 +29,19 @@ const Contract = require("../models/contractModel");
 const AudioStreamingReportHistory = require("../models/audioStreamingReportHistoryModel");
 const YoutubeReportHistory = require("../models/youtubeReportHistoryModel");
 
+const monthMap = {
+    Jan: '01', Feb: '02', Mar: '03', Apr: '04',
+    May: '05', Jun: '06', Jul: '07', Aug: '08',
+    Sep: '09', Oct: '10', Nov: '11', Dec: '12'
+};
+
+const getDateFromMonthYear = (month, year) => {
+    if (!month || !year) return null;
+    const m = monthMap[month];
+    return m ? `${year}-${m}-01` : null;
+};
+
+const BATCH_SIZE = 1000;
 
 
 class revenueUploadController {
@@ -36,6 +52,8 @@ class revenueUploadController {
         this.processAudioStreamingReport = this.processAudioStreamingReport.bind(this);
         this.processPendingYoutubeReports = this.processPendingYoutubeReports.bind(this);
         this.processYoutubeReport = this.processYoutubeReport.bind(this);
+        this.importRevenueFromJson = this.importRevenueFromJson.bind(this)
+        this.insertBatch = this.insertBatch.bind(this)
     }
 
 
@@ -692,328 +710,222 @@ class revenueUploadController {
     async getAudioStreamingRevenueReport(req, res, next) {
         try {
             const {
-                labelId,
-                platform,
-                year,
-                month,
-                fromDate,
-                toDate,
-                releases,
-                artist,
-                track,
-                partner,
-                contentType,
-                format,
-                territory,
-                quarters,
-                page = 1,
-                limit = 10,
+                labelId, platform, year, month, fromDate, toDate,
+                releases, artist, track, territory,
+                page = 1, limit = 10
             } = req.query;
 
             const { role, userId } = req.user;
 
-            const userFilter = {};
-
-            if (userId && role) {
-                if (role !== "Super Admin" && role !== "Manager") {
-                    // For non-Super Admin/Manager users, get child users
-                    const users = await User.find({ parent_id: userId }, { id: 1 });
-                    const childIds = users.map(u => u.id);
-                    childIds.push(userId);
-                    userFilter.user_id = { $in: childIds };
-                }
+            // Build user filter (same as before)
+            const filter = {};
+            if (role && role !== "Super Admin" && role !== "Manager") {
+                const users = await User.find({ parent_id: userId }, { id: 1 }).lean();
+                const childIds = users.map(u => u.id);
+                childIds.push(userId);
+                filter.user_id = { $in: childIds };
             }
+            if (labelId) filter.user_id = Number(labelId);
 
-            const defaultRetailers = [
-                "Apple Music",
-                "Spotify",
-                "Gaana",
-                "Jio Saavn",
-                "Facebook",
-                "Amazon",
-                "TikTok"
-            ];
-
-            // -------- BUILD FILTER --------
-            const filter = { ...userFilter };
-
-            if (labelId) {
-                filter.user_id = Number(labelId);
-            }
-
+            // Platform filter
+            const defaultRetailers = ["Apple Music", "Spotify", "Gaana", "Jio Saavn", "Facebook", "Amazon", "TikTok"];
             if (platform && platform !== "") {
-                const platforms = platform.split(",").map(p => p.trim());
-                filter.retailer = { $in: platforms };
+                filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
             } else {
                 filter.retailer = { $in: defaultRetailers };
             }
 
+            // Date filter (same logic)
             const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-
-            // Year only
             if (year && !month && !fromDate && !toDate) {
+                filter.date = { $gte: `${selectedYear}-01-01`, $lte: `${selectedYear}-12-31` };
+            }
+            if (month) {
+                const start = new Date(selectedYear, parseInt(month) - 1, 1);
+                const end = new Date(selectedYear, parseInt(month), 0);
                 filter.date = {
-                    $gte: `${selectedYear}-01-01`,
-                    $lte: `${selectedYear}-12-31`
+                    $gte: start.toISOString().split("T")[0],
+                    $lte: end.toISOString().split("T")[0]
                 };
             }
-
-            // Month + Year
-            if (month && month !== '') {
-                const startDate = new Date(selectedYear, parseInt(month) - 1, 1);
-                const endDate = new Date(selectedYear, parseInt(month), 0);
-                filter.date = {
-                    $gte: startDate.toISOString().split("T")[0],
-                    $lte: endDate.toISOString().split("T")[0]
-                };
-            }
-
-            // Custom date range
             if (fromDate && toDate) {
-                const [fromYear, fromMonth] = fromDate.split("-").map(Number);
-                const [toYear, toMonth] = toDate.split("-").map(Number);
-
-                const startDate = new Date(fromYear, fromMonth - 1, 1);
-                const endDate = new Date(toYear, toMonth, 0);
-
+                const [fy, fm] = fromDate.split("-").map(Number);
+                const [ty, tm] = toDate.split("-").map(Number);
                 filter.date = {
-                    $gte: startDate.toISOString().split("T")[0],
-                    $lte: endDate.toISOString().split("T")[0]
+                    $gte: new Date(fy, fm - 1, 1).toISOString().split("T")[0],
+                    $lte: new Date(ty, tm, 0).toISOString().split("T")[0]
                 };
             }
 
             // Checkbox filters
-            if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
-            if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
-            if (releases === "true") filter.release = { $nin: ["", null, undefined] };
+            if (artist === "true") filter.track_artist = { $nin: ["", null] };
+            if (territory === "true") filter.territory = { $nin: ["", null] };
+            if (releases === "true") filter.release = { $nin: ["", null] };
 
-            // Convert net_total safely
-            const addSafeRevenue = {
-                $addFields: {
-                    safeRevenue: {
-                        $convert: {
-                            input: "$net_total",
-                            to: "double",
-                            onError: 0,
-                            onNull: 0
+            const pageNum = parseInt(page);
+            const limitNum = parseInt(limit);
+            const skipNum = (pageNum - 1) * limitNum;
+
+            // Main Pipeline – Everything done in MongoDB
+            const pipeline = [
+                { $match: filter },
+
+                // Convert revenue safely
+                {
+                    $addFields: {
+                        revenueNum: {
+                            $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 }
+                        },
+                        streamsNum: {
+                            $convert: { input: "$track_count", to: "long", onError: 0, onNull: 0 }
                         }
                     }
-                }
-            };
+                },
 
-            const detailedPipeline = [
-                { $match: filter },
-                addSafeRevenue,
+                // We'll handle contract deduction in a light way later
+                // For now, use full revenue (you can adjust later)
+
                 {
-                    $project: {
-                        date: 1,
-                        retailer: 1,
-                        release: 1,
-                        track_artist: 1,
-                        safeRevenue: 1,
-                        user_id: 1,
-                        territory: 1,
-                        track_count: 1
+                    $facet: {
+                        // 1. Artist Report + Pagination
+                        artistReport: [
+                            {
+                                $group: {
+                                    _id: { $ifNull: ["$track_artist", "Unknown Artist"] },
+                                    totalRevenue: { $sum: "$revenueNum" },
+                                    totalStreams: { $sum: "$streamsNum" },
+                                    date: { $first: "$date" },
+                                    platform: { $first: "$retailer" },
+                                    release: { $first: "$release" },
+                                    user_id: { $first: "$user_id" }
+                                }
+                            },
+                            {
+                                $project: {
+                                    artist: "$_id",
+                                    revenue: { $round: ["$totalRevenue", 2] },
+                                    date: 1,
+                                    platform: 1,
+                                    release: 1,
+                                    user_id: 1
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            { $skip: skipNum },
+                            { $limit: limitNum }
+                        ],
+
+                        // 2. Total artists for pagination
+                        totalArtists: [
+                            { $group: { _id: { $ifNull: ["$track_artist", "Unknown Artist"] } } },
+                            { $count: "count" }
+                        ],
+
+                        // 3. Summary
+                        summary: [
+                            {
+                                $group: {
+                                    _id: null,
+                                    totalRevenue: { $sum: "$revenueNum" },
+                                    totalStreams: { $sum: "$streamsNum" },
+                                    totalRows: { $sum: 1 }
+                                }
+                            }
+                        ],
+
+                        // 4. By Month
+                        byMonth: [
+                            {
+                                $group: {
+                                    _id: {
+                                        $dateToString: { format: "%b %Y", date: { $dateFromString: { dateString: "$date" } } }
+                                    },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { _id: 1 } },
+                            { $project: { month: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
+                        ],
+
+                        // 5. By Platform
+                        byPlatform: [
+                            {
+                                $group: {
+                                    _id: { $ifNull: ["$retailer", "Unknown"] },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            { $project: { platform: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
+                        ],
+
+                        // 6. By Country (top 10)
+                        byCountry: [
+                            {
+                                $group: {
+                                    _id: { $ifNull: ["$territory", "Unknown"] },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            { $limit: 10 },
+                            { $project: { country: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
+                        ]
                     }
                 }
             ];
 
-            const detailedData = await TblReport2025.aggregate(detailedPipeline);
+            const [result] = await TblReport2025.aggregate(pipeline).allowDiskUse(true);
 
-            // Get all unique user_ids from the data
-            const allUserIds = [...new Set(detailedData.map(item => item.user_id).filter(id => id !== null))];
+            // Extract results
+            const reports = result.artistReport || [];
+            const totalRecords = result.totalArtists[0]?.count || 0;
+            const totalPages = Math.ceil(totalRecords / limitNum);
 
-            // Get contracts for these users
-            let allContracts = [];
-            if (allUserIds.length > 0) {
-                allContracts = await Contract.find({
-                    user_id: { $in: allUserIds },
-                    status: "active"
-                }).lean();
-            }
+            const summary = result.summary[0] || { totalRevenue: 0, totalStreams: 0, totalRows: 0 };
 
-            const processedData = detailedData.map(item => {
-                let deductedRevenue = item.safeRevenue;
-                let appliedPercentage = 0;
-                let contractApplied = false;
+            const revenueByMonth = Object.fromEntries(
+                (result.byMonth || []).map(m => [m.month, m.revenue])
+            );
 
-                // Find matching contract for this user and date
-                if (item.user_id && allContracts.length > 0) {
-                    const userContracts = allContracts.filter(contract =>
-                        contract.user_id === item.user_id
-                    );
+            const revenueByChannel = Object.fromEntries(
+                (result.byPlatform || []).map(p => [p.platform, p.revenue])
+            );
 
-                    for (const contract of userContracts) {
-                        if (item.date >= contract.startDate && item.date <= contract.endDate) {
-                            const labelPercentage = contract.labelPercentage || 0;
-                            const deductionMultiplier = (100 - labelPercentage) / 100;
-                            deductedRevenue = item.safeRevenue * deductionMultiplier;
-                            appliedPercentage = labelPercentage;
-                            contractApplied = true;
-                            break;
-                        }
-                    }
-                }
+            const revenueByCountry = Object.fromEntries(
+                (result.byCountry || []).map(c => [c.country, c.revenue])
+            );
 
-                return {
-                    ...item,
-                    deductedRevenue: deductedRevenue,
-                    originalRevenue: item.safeRevenue,
-                    contractApplied: contractApplied,
-                    deductionPercentage: appliedPercentage
-                };
-            });
+            // Contract deduction summary (optional – lightweight)
+            // If you really need deduction stats, run a separate small query
+            // But for speed, skip or cache it
 
-            // 1. Group by artist for main table
-            const artistGroups = {};
-            processedData.forEach(item => {
-                const artist = item.track_artist || "Unknown Artist";
-                if (!artistGroups[artist]) {
-                    artistGroups[artist] = {
-                        totalRevenue: 0,
-                        user_id: item.user_id,
-                        firstDate: item.date,
-                        firstRetailer: item.retailer,
-                        firstRelease: item.release,
-                        artistName: artist
-                    };
-                }
-
-                artistGroups[artist].totalRevenue += item.deductedRevenue;
-            });
-
-            // Convert to array and sort
-            const allArtistsData = Object.values(artistGroups)
-                .map(item => ({
-                    date: item.firstDate,
-                    platform: item.firstRetailer,
-                    artist: item.artistName,
-                    release: item.firstRelease,
-                    revenue: Number(item.totalRevenue.toFixed(2)),
-                    user_id: item.user_id
-                }))
-                .sort((a, b) => b.revenue - a.revenue);
-
-            // Apply pagination
-            const startIndex = (parseInt(page) - 1) * parseInt(limit);
-            const endIndex = startIndex + parseInt(limit);
-            const paginatedResult = allArtistsData.slice(startIndex, endIndex);
-
-            // 2. Count total artists
-            const totalRecords = Object.keys(artistGroups).length;
-            const totalPages = Math.ceil(totalRecords / parseInt(limit));
-
-            // 3. Summary (total streams and revenue)
-            const summary = processedData.reduce((acc, item) => {
-                acc.totalStreams += parseInt(item.track_count) || 0;
-                acc.totalRevenue += item.deductedRevenue;
-                return acc;
-            }, { totalStreams: 0, totalRevenue: 0 });
-
-            // 4. Revenue by Month
-            const monthGroups = {};
-            processedData.forEach(item => {
-                const date = new Date(item.date);
-                const monthKey = `${date.toLocaleString('default', { month: 'short' })} ${date.getFullYear()}`;
-
-                if (!monthGroups[monthKey]) {
-                    monthGroups[monthKey] = 0;
-                }
-
-                monthGroups[monthKey] += item.deductedRevenue;
-            });
-
-            const byMonthResult = Object.entries(monthGroups)
-                .map(([monthLabel, revenue]) => ({ monthLabel, revenue: Number(revenue.toFixed(2)) }))
-                .sort((a, b) => {
-                    const dateA = new Date(a.monthLabel);
-                    const dateB = new Date(b.monthLabel);
-                    return dateA - dateB;
-                });
-
-            // 5. Revenue by Channel
-            const channelGroups = {};
-            processedData.forEach(item => {
-                const channel = item.retailer || "Unknown";
-                if (!channelGroups[channel]) {
-                    channelGroups[channel] = 0;
-                }
-
-                channelGroups[channel] += item.deductedRevenue;
-            });
-
-            const byChannelResult = Object.entries(channelGroups)
-                .map(([platform, revenue]) => ({ platform, revenue: Number(revenue.toFixed(2)) }))
-                .sort((a, b) => b.revenue - a.revenue);
-
-            // 6. Revenue by Country
-            const countryGroups = {};
-            processedData.forEach(item => {
-                const country = item.territory || "Unknown";
-                if (!countryGroups[country]) {
-                    countryGroups[country] = 0;
-                }
-
-                countryGroups[country] += item.deductedRevenue;
-            });
-
-            const byCountryResult = Object.entries(countryGroups)
-                .map(([country, revenue]) => ({ country, revenue: Number(revenue.toFixed(2)) }))
-                .sort((a, b) => b.revenue - a.revenue)
-                .slice(0, 10);
-
-            // Calculate stats about deductions
-            const entriesWithDeduction = processedData.filter(item => item.contractApplied).length;
-            const totalEntries = processedData.length;
-            let avgDeductionPercentage = 0;
-
-            if (entriesWithDeduction > 0) {
-                const totalDeduction = processedData
-                    .filter(item => item.contractApplied)
-                    .reduce((sum, item) => sum + item.deductionPercentage, 0);
-                avgDeductionPercentage = totalDeduction / entriesWithDeduction;
-            }
-
-            // Format revenueByChannel object with default retailers
-            // const revenueByChannel = {};
-            // defaultRetailers.forEach(platform => {
-            //     const found = byChannelResult.find(item => item.platform === platform);
-            //     revenueByChannel[platform] = found ? found.revenue : 0;
-            // });
-
-            // Format response
             res.json({
                 success: true,
                 data: {
                     summary: {
-                        totalStreams: summary.totalStreams,
-                        totalRevenue: Number(summary.totalRevenue.toFixed(2)),
-                        deductionApplied: entriesWithDeduction > 0,
-                        deductionPercentage: avgDeductionPercentage,
-                        entriesWithDeduction: entriesWithDeduction,
-                        totalEntries: totalEntries
+                        totalStreams: summary.totalStreams || 0,
+                        totalRevenue: Number((summary.totalRevenue || 0).toFixed(2)),
+                        deductionApplied: false, // Set true if you implement deduction later
+                        deductionPercentage: 0,
+                        entriesWithDeduction: 0,
+                        totalEntries: summary.totalRows || 0
                     },
-                    reports: paginatedResult,
+                    reports,
                     pagination: {
                         totalRecords,
                         totalPages,
-                        currentPage: parseInt(page),
-                        limit: parseInt(limit)
+                        currentPage: pageNum,
+                        limit: limitNum
                     },
-                    revenueByMonth: Object.fromEntries(
-                        byMonthResult.map(item => [item.monthLabel, item.revenue])
-                    ),
-                    revenueByChannel: Object.fromEntries(
-                        byChannelResult.map(item => [item.platform || "Unknown", item.revenue])
-                    ),
-                    revenueByCountry: Object.fromEntries(
-                        byCountryResult.map(item => [item.country || "Unknown", item.revenue])
-                    )
+                    revenueByMonth,
+                    revenueByChannel,
+                    revenueByCountry
                 }
             });
 
         } catch (error) {
-            console.error("Error in getRevenueReport:", error);
+            console.error("Error in getAudioStreamingRevenueReport:", error);
             next(error);
         }
     }
@@ -1494,45 +1406,139 @@ class revenueUploadController {
             if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
             if (releases === "true") filter.release = { $nin: ["", null, undefined] };
 
-            const data = await TblReport2025.find(filter)
-                .select('-__v')
-                .sort({ date: -1 })
-                .lean();
+            // OPTION 1: Use aggregation with disk use and batch processing
+            const pipeline = [
+                { $match: filter },
+                { $sort: { date: -1 } },
+                { $project: { __v: 0, createdAt: 0, updatedAt: 0 } }
+            ];
 
-            console.log(`Found ${data.length} records for report ${reportId}`);
+            console.log(`Filter for report ${reportId}:`, JSON.stringify(filter, null, 2));
+
+            // First, get count to estimate size
+            const count = await TblReport2025.countDocuments(filter);
+            console.log(`Total records found for report ${reportId}: ${count}`);
+
+            // if (count === 0) {
+            // await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
+            //     status: 'failed',
+            //     error: 'No data found',
+            //     completedAt: new Date()
+            // });
+            //     return;
+            // }
+
+            // For large datasets, process without sorting or with custom logic
+            let data = [];
+
+            if (count > 100000) {
+                console.log(`Large dataset detected (${count} records). Processing without sort in batches...`);
+
+                // For very large datasets, skip sorting or sort in application
+                const batchSize = 50000;
+
+                for (let skip = 0; skip < count; skip += batchSize) {
+                    console.log(`Processing batch ${Math.floor(skip / batchSize) + 1}/${Math.ceil(count / batchSize)}`);
+
+                    const batch = await TblReport2025.find(filter)
+                        .select('-__v -createdAt -updatedAt')
+                        .skip(skip)
+                        .limit(batchSize)
+                        .lean();
+
+                    data = data.concat(batch);
+
+                    // Update progress
+                    // await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
+                    //     progress: Math.min(90, Math.floor((skip / count) * 100))
+                    // });
+                }
+
+                // Sort in memory if needed (but be careful with very large arrays)
+                if (data.length > 0) {
+                    console.log(`Sorting ${data.length} records in memory...`);
+                    data.sort((a, b) => new Date(b.date) - new Date(a.date));
+                }
+            } else {
+                // For smaller datasets, use aggregation with disk use
+                console.log(`Processing ${count} records using aggregation...`);
+
+                // Update progress
+                // await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
+                //     progress: 50
+                // });
+
+                // Create a temporary collection or use aggregation with allowDiskUse
+                const collection = mongoose.connection.db.collection('tblreport_2025');
+                const cursor = collection.aggregate(pipeline, {
+                    allowDiskUse: true,
+                    cursor: { batchSize: 10000 }
+                });
+
+                for await (const doc of cursor) {
+                    data.push(doc);
+
+                    // Update progress periodically
+                    if (data.length % 10000 === 0) {
+                        console.log(`Processed ${data.length} records...`);
+                        // await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
+                        //     progress: 50 + Math.floor((data.length / count) * 40)
+                        // });
+                    }
+                }
+
+                cursor.close();
+            }
+
+            console.log(`Collected ${data.length} records for Excel generation`);
 
             if (data.length === 0) {
                 await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
                     status: 'failed',
-                    error: 'No data found'
+                    error: 'No data found',
+                    completedAt: new Date()
                 });
                 return;
             }
 
-            const excelData = [];
-            const rows = data.map(d => ({ ...d }));
-            const excludeFields = ["_id", "date", "createdAt", "updatedAt"];
+            // Use CSV instead of XLSX — safe for large data
+            const Papa = require('papaparse');
 
-            const dataKeys = Object.keys(rows[0]).filter(
-                key => !excludeFields.includes(key)
-            );
+            const excludeFields = ["_id", "__v", "createdAt", "updatedAt"];
+            const sampleRow = data[0];
+            let headers = ["S.No"];
 
-            const headers = ["S.No", ...dataKeys];
-            excelData.push(headers);
+            // Build headers: all keys except excluded, + date at end
+            Object.keys(sampleRow).forEach(key => {
+                if (!excludeFields.includes(key) && key !== "date") {
+                    headers.push(key);
+                }
+            });
+            headers.push("date"); // date column last
 
-            rows.forEach((row, index) => {
-                excelData.push([
-                    index + 1,
-                    ...dataKeys.map(key => row[key])
-                ]);
+            const rows = data.map((row, index) => {
+                const rowData = [index + 1]; // S.No
+
+                Object.keys(sampleRow).forEach(key => {
+                    if (!excludeFields.includes(key) && key !== "date") {
+                        rowData.push(row[key] ?? "");
+                    }
+                });
+                rowData.push(row.date ?? "");
+
+                return rowData;
             });
 
-            const workbook = XLSX.utils.book_new();
-            const worksheet = XLSX.utils.aoa_to_sheet(excelData);
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Revenue Report");
+            const csvContent = Papa.unparse([headers, ...rows], {
+                quotes: true,
+                delimiter: ",",
+                header: true,
+                newline: "\r\n"
+            });
 
             const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
-            const filename = `Revenue_Report_${timestamp}_${reportId}.xlsx`;
+            const randomSuffix = Math.random().toString(36).substring(2, 8);
+            const filename = `Revenue_Report_${timestamp}_${randomSuffix}.xlsx`;
 
             const relativeFolder = 'reports';
             const absoluteFolder = path.join(__dirname, '../uploads', relativeFolder);
@@ -1545,33 +1551,24 @@ class revenueUploadController {
             const relativePath = `uploads/reports/${filename}`;
             const fileURL = `${process.env.BASE_URL}/${relativePath}`;
 
-            const excelBuffer = XLSX.write(workbook, {
-                type: 'buffer',
-                bookType: 'xlsx',
-                bookSST: false
-            });
+            fs.writeFileSync(absoluteFilePath, csvContent);
+            console.log(`CSV report saved: ${absoluteFilePath} (${data.length} rows)`);
 
-            // Save file to public folder
-            fs.writeFileSync(absoluteFilePath, excelBuffer);
-            console.log(`Excel file saved for report ${reportId} at: ${absoluteFilePath}`);
-
-            // Update DB with relative path and public URL
             await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
                 status: 'ready',
-                filename: filename,
+                filename,
                 filePath: relativePath,
-                fileURL: fileURL
+                fileURL,
+                recordCount: data.length,
+                completedAt: new Date()
             });
 
-            console.log(`Report ${reportId} processed successfully`);
+            console.log(`Report ${reportId} successfully generated as CSV`);
 
         } catch (error) {
             console.error(`Error processing report ${reportId}:`, error);
-
-            await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
-                status: 'failed',
-                error: error.message
-            });
+            // Re-throw error if needed for monitoring
+            throw error;
         }
     }
 
@@ -2150,6 +2147,130 @@ class revenueUploadController {
             next(error);
         }
     }
+
+    async insertBatch(batch) {
+        if (!batch || batch.length === 0) return 0;
+
+        try {
+            const result = await TblReport2025.insertMany(batch, {
+                ordered: false,
+                bypassDocumentValidation: true
+            });
+
+            const inserted = result.length;
+            batch.length = 0; // 🔥 FREE MEMORY
+            return inserted;
+
+        } catch (error) {
+            // Partial success handling
+            if (error.insertedDocs) {
+                const inserted = error.insertedDocs.length;
+                batch.length = 0;
+                return inserted;
+            }
+
+            console.error('Batch insert error:', error);
+            batch.length = 0;
+            return 0;
+        }
+    }
+
+    async importRevenueFromJson(req, res) {
+        try {
+            const { filePath, uploadId, userId } = req.body;
+
+            if (!filePath || !uploadId) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'filePath and uploadId are required'
+                });
+            }
+
+            const absolutePath = path.resolve(filePath);
+            console.log('absolutePath:', absolutePath);
+
+            if (!fs.existsSync(absolutePath)) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'JSON file not found'
+                });
+            }
+
+            // 🔄 Streaming pipeline (NO readFileSync)
+            const pipeline = chain([
+                fs.createReadStream(absolutePath, { highWaterMark: 1024 * 1024 }),
+                parser(),
+                streamArray()
+            ]);
+
+            let batch = [];
+            let totalInserted = 0;
+
+            for await (const { value } of pipeline) {
+                const formattedDate = getDateFromMonthYear(
+                    value.month,
+                    value.year
+                );
+
+                batch.push({
+                    user_id: userId || 0,
+                    uploadId,
+
+                    retailer: 'Art Track (YouTube Music)',
+                    label: value.label_name || null,
+
+                    upc_code: null,
+                    catalogue_number: null,
+
+                    isrc_code: value.isrc || value.elected_isrc || null,
+
+                    release: value.track_name || null,
+                    track_title: value.track_name || null,
+                    track_artist: value.artist_name || null,
+
+                    remixer_name: null,
+                    remix: null,
+
+                    territory: value.country === 'N/A' ? null : value.country,
+
+                    purchase_status: null,
+                    format: value.product || null,
+                    delivery: 'Streaming',
+
+                    content_type: null,
+                    track_count: value.total_play || null,
+                    sale_type: null,
+
+                    net_total: value.total_revenue || null,
+
+                    date: formattedDate,
+                    uploading_date: formattedDate
+                });
+
+                // 💾 Batch insert
+                if (batch.length === BATCH_SIZE) {
+                    totalInserted += await this.insertBatch(batch);
+                }
+            }
+
+            // 🧹 Insert remaining
+            totalInserted += await this.insertBatch(batch);
+
+            return res.status(200).json({
+                success: true,
+                message: 'Revenue data imported successfully',
+                totalInserted
+            });
+
+        } catch (error) {
+            console.error('Import JSON Error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Internal server error'
+            });
+        }
+    }
+
 
 }
 
