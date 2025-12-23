@@ -78,8 +78,11 @@ router.post("/uploadRevenue", authMiddleware, upload.single("file"), revenueCont
 router.get("/fetchAllRevenueUploads", authMiddleware, revenueController.getAllRevenueUploads);
 router.get('/getRevenueById', authMiddleware, revenueController.getRevenueById);
 router.post("/uploadTblRevenue", authMiddleware, revenueController.uploadTblRevenue);
-router.get('/audioStreamingRevenueReport', authMiddleware, revenueController.getAudioStreamingRevenueReport);
-router.get('/youtubeRevenueReport', authMiddleware, revenueController.getYoutubeRevenueReport);
+router.get('/audio-streaming-revenue/summary', authMiddleware, revenueController.getAudioStreamingRevenueSummary);
+router.get('/audio-streaming-revenue/reports', authMiddleware, revenueController.getAudioStreamingRevenueReports);
+router.get('/youtube-revenue/summary', authMiddleware, revenueController.getYoutubeRevenueSummary);
+router.get('/youtube-revenue/reports', authMiddleware, revenueController.getYoutubeRevenueReports);
+// router.get('/youtubeRevenueReport', authMiddleware, revenueController.getYoutubeRevenueReport);
 router.delete('/deleteRevenueByUserId', authMiddleware, revenueController.deleteRevenueByUserId);
 router.get('/report-history', authMiddleware, revenueController.getReportHistory);
 router.delete('/delete-audio-report', authMiddleware, revenueController.deleteReportHistory);

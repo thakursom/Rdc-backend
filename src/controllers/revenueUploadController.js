@@ -5,6 +5,8 @@ const { chain } = require('stream-chain');
 const { parser } = require('stream-json');
 const { streamArray } = require('stream-json/streamers/StreamArray');
 const mongoose = require("mongoose");
+const Papa = require('papaparse');
+
 const LogService = require("../services/logService");
 const User = require("../models/userModel");
 const RevenueUpload = require("../models/RevenueUploadModel");
@@ -706,18 +708,17 @@ class revenueUploadController {
         }
     }
 
-    // getAudioStreamingRevenueReport method
-    async getAudioStreamingRevenueReport(req, res, next) {
+    // getAudioStreamingRevenueSummary method
+    async getAudioStreamingRevenueSummary(req, res, next) {
         try {
             const {
                 labelId, platform, year, month, fromDate, toDate,
-                releases, artist, track, territory,
-                page = 1, limit = 10
+                releases, artist, track, territory
             } = req.query;
 
             const { role, userId } = req.user;
 
-            // Build user filter (same as before)
+            // === Build filter (same as original) ===
             const filter = {};
             if (role && role !== "Super Admin" && role !== "Manager") {
                 const users = await User.find({ parent_id: userId }, { id: 1 }).lean();
@@ -727,7 +728,6 @@ class revenueUploadController {
             }
             if (labelId) filter.user_id = Number(labelId);
 
-            // Platform filter
             const defaultRetailers = ["Apple Music", "Spotify", "Gaana", "Jio Saavn", "Facebook", "Amazon", "TikTok"];
             if (platform && platform !== "") {
                 filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
@@ -735,7 +735,6 @@ class revenueUploadController {
                 filter.retailer = { $in: defaultRetailers };
             }
 
-            // Date filter (same logic)
             const selectedYear = year ? parseInt(year) : new Date().getFullYear();
             if (year && !month && !fromDate && !toDate) {
                 filter.date = { $gte: `${selectedYear}-01-01`, $lte: `${selectedYear}-12-31` };
@@ -743,10 +742,7 @@ class revenueUploadController {
             if (month) {
                 const start = new Date(selectedYear, parseInt(month) - 1, 1);
                 const end = new Date(selectedYear, parseInt(month), 0);
-                filter.date = {
-                    $gte: start.toISOString().split("T")[0],
-                    $lte: end.toISOString().split("T")[0]
-                };
+                filter.date = { $gte: start.toISOString().split("T")[0], $lte: end.toISOString().split("T")[0] };
             }
             if (fromDate && toDate) {
                 const [fy, fm] = fromDate.split("-").map(Number);
@@ -757,116 +753,105 @@ class revenueUploadController {
                 };
             }
 
-            // Checkbox filters
-            if (artist === "true") filter.track_artist = { $nin: ["", null] };
-            if (territory === "true") filter.territory = { $nin: ["", null] };
-            if (releases === "true") filter.release = { $nin: ["", null] };
+            if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
+            if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
+            if (releases === "true") filter.release = { $nin: ["", null, undefined] };
 
-            const pageNum = parseInt(page);
-            const limitNum = parseInt(limit);
-            const skipNum = (pageNum - 1) * limitNum;
-
-            // Main Pipeline – Everything done in MongoDB
-            const pipeline = [
+            // === Step 1: Daily aggregation for revenue and streams ===
+            const dailyPipeline = [
                 { $match: filter },
-
-                // Convert revenue safely
                 {
                     $addFields: {
-                        revenueNum: {
-                            $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 }
-                        },
-                        streamsNum: {
-                            $convert: { input: "$track_count", to: "long", onError: 0, onNull: 0 }
-                        }
+                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } },
+                        streamsNum: { $convert: { input: "$track_count", to: "long", onError: 0, onNull: 0 } }
                     }
                 },
+                {
+                    $group: {
+                        _id: { user_id: "$user_id", date: "$date" },
+                        dailyRevenue: { $sum: "$revenueNum" },
+                        dailyStreams: { $sum: "$streamsNum" }
+                    }
+                },
+                {
+                    $project: {
+                        user_id: "$_id.user_id",
+                        date: "$_id.date",
+                        dailyRevenue: 1,
+                        dailyStreams: 1,
+                        _id: 0
+                    }
+                }
+            ];
 
-                // We'll handle contract deduction in a light way later
-                // For now, use full revenue (you can adjust later)
+            const dailyData = await TblReport2025.aggregate(dailyPipeline).allowDiskUse(true);
 
+            // === Step 2: Fetch contracts and apply deductions ===
+            const uniqueUserIds = [...new Set(dailyData.map(d => d.user_id).filter(Boolean))];
+            const contracts = uniqueUserIds.length > 0
+                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+                : [];
+
+            const contractMap = new Map();
+            contracts.forEach(c => {
+                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                contractMap.get(c.user_id).push(c);
+            });
+
+            // Apply deductions
+            let totalDeductedRevenue = 0;
+            let totalStreams = 0;
+            let entriesWithDeduction = 0;
+            let sumDeductionPercent = 0;
+
+            dailyData.forEach(item => {
+                let deducted = item.dailyRevenue;
+                let percentage = 0;
+                let applied = false;
+
+                const userContracts = contractMap.get(item.user_id) || [];
+                for (const contract of userContracts) {
+                    if (item.date >= contract.startDate && item.date <= contract.endDate) {
+                        percentage = contract.labelPercentage || 0;
+                        deducted = item.dailyRevenue * ((100 - percentage) / 100);
+                        applied = true;
+                        break;
+                    }
+                }
+
+                if (applied) {
+                    entriesWithDeduction++;
+                    sumDeductionPercent += percentage;
+                }
+
+                totalDeductedRevenue += deducted;
+                totalStreams += item.dailyStreams;
+            });
+
+            const avgDeductionPercentage = entriesWithDeduction > 0 ? sumDeductionPercent / entriesWithDeduction : 0;
+
+            // === Step 3: Charts data ===
+            const chartPipeline = [
+                { $match: filter },
+                {
+                    $addFields: {
+                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } }
+                    }
+                },
                 {
                     $facet: {
-                        // 1. Artist Report + Pagination
-                        artistReport: [
-                            {
-                                $group: {
-                                    _id: { $ifNull: ["$track_artist", "Unknown Artist"] },
-                                    totalRevenue: { $sum: "$revenueNum" },
-                                    totalStreams: { $sum: "$streamsNum" },
-                                    date: { $first: "$date" },
-                                    platform: { $first: "$retailer" },
-                                    release: { $first: "$release" },
-                                    user_id: { $first: "$user_id" }
-                                }
-                            },
-                            {
-                                $project: {
-                                    artist: "$_id",
-                                    revenue: { $round: ["$totalRevenue", 2] },
-                                    date: 1,
-                                    platform: 1,
-                                    release: 1,
-                                    user_id: 1
-                                }
-                            },
-                            { $sort: { revenue: -1 } },
-                            { $skip: skipNum },
-                            { $limit: limitNum }
-                        ],
-
-                        // 2. Total artists for pagination
-                        totalArtists: [
-                            { $group: { _id: { $ifNull: ["$track_artist", "Unknown Artist"] } } },
-                            { $count: "count" }
-                        ],
-
-                        // 3. Summary
-                        summary: [
-                            {
-                                $group: {
-                                    _id: null,
-                                    totalRevenue: { $sum: "$revenueNum" },
-                                    totalStreams: { $sum: "$streamsNum" },
-                                    totalRows: { $sum: 1 }
-                                }
-                            }
-                        ],
-
-                        // 4. By Month
                         byMonth: [
-                            {
-                                $group: {
-                                    _id: {
-                                        $dateToString: { format: "%b %Y", date: { $dateFromString: { dateString: "$date" } } }
-                                    },
-                                    revenue: { $sum: "$revenueNum" }
-                                }
-                            },
+                            { $group: { _id: { $dateToString: { format: "%b %Y", date: { $dateFromString: { dateString: "$date" } } } }, revenue: { $sum: "$revenueNum" } } },
                             { $sort: { _id: 1 } },
                             { $project: { month: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
                         ],
-
-                        // 5. By Platform
                         byPlatform: [
-                            {
-                                $group: {
-                                    _id: { $ifNull: ["$retailer", "Unknown"] },
-                                    revenue: { $sum: "$revenueNum" }
-                                }
-                            },
+                            { $group: { _id: { $ifNull: ["$retailer", "Unknown"] }, revenue: { $sum: "$revenueNum" } } },
                             { $sort: { revenue: -1 } },
                             { $project: { platform: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
                         ],
-
-                        // 6. By Country (top 10)
                         byCountry: [
-                            {
-                                $group: {
-                                    _id: { $ifNull: ["$territory", "Unknown"] },
-                                    revenue: { $sum: "$revenueNum" }
-                                }
-                            },
+                            { $group: { _id: { $ifNull: ["$territory", "Unknown"] }, revenue: { $sum: "$revenueNum" } } },
                             { $sort: { revenue: -1 } },
                             { $limit: 10 },
                             { $project: { country: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
@@ -875,48 +860,33 @@ class revenueUploadController {
                 }
             ];
 
-            const [result] = await TblReport2025.aggregate(pipeline).allowDiskUse(true);
+            const [chartResult] = await TblReport2025.aggregate(chartPipeline).allowDiskUse(true);
 
-            // Extract results
-            const reports = result.artistReport || [];
-            const totalRecords = result.totalArtists[0]?.count || 0;
-            const totalPages = Math.ceil(totalRecords / limitNum);
-
-            const summary = result.summary[0] || { totalRevenue: 0, totalStreams: 0, totalRows: 0 };
+            // Apply global deduction ratio to charts
+            const grossTotal = chartResult.byMonth.reduce((s, m) => s + m.revenue, 0);
+            const deductionRatio = grossTotal > 0 ? totalDeductedRevenue / grossTotal : 1;
 
             const revenueByMonth = Object.fromEntries(
-                (result.byMonth || []).map(m => [m.month, m.revenue])
+                chartResult.byMonth.map(m => [m.month, Number((m.revenue * deductionRatio).toFixed(2))])
             );
-
             const revenueByChannel = Object.fromEntries(
-                (result.byPlatform || []).map(p => [p.platform, p.revenue])
+                chartResult.byPlatform.map(p => [p.platform, Number((p.revenue * deductionRatio).toFixed(2))])
             );
-
             const revenueByCountry = Object.fromEntries(
-                (result.byCountry || []).map(c => [c.country, c.revenue])
+                chartResult.byCountry.map(c => [c.country, Number((c.revenue * deductionRatio).toFixed(2))])
             );
 
-            // Contract deduction summary (optional – lightweight)
-            // If you really need deduction stats, run a separate small query
-            // But for speed, skip or cache it
-
+            // === Response ===
             res.json({
                 success: true,
                 data: {
                     summary: {
-                        totalStreams: summary.totalStreams || 0,
-                        totalRevenue: Number((summary.totalRevenue || 0).toFixed(2)),
-                        deductionApplied: false, // Set true if you implement deduction later
-                        deductionPercentage: 0,
-                        entriesWithDeduction: 0,
-                        totalEntries: summary.totalRows || 0
-                    },
-                    reports,
-                    pagination: {
-                        totalRecords,
-                        totalPages,
-                        currentPage: pageNum,
-                        limit: limitNum
+                        totalStreams: totalStreams || 0,
+                        totalRevenue: Number(totalDeductedRevenue.toFixed(2)),
+                        deductionApplied: entriesWithDeduction > 0,
+                        deductionPercentage: Number(avgDeductionPercentage.toFixed(2)),
+                        entriesWithDeduction,
+                        totalEntries: dailyData.length
                     },
                     revenueByMonth,
                     revenueByChannel,
@@ -925,46 +895,204 @@ class revenueUploadController {
             });
 
         } catch (error) {
-            console.error("Error in getAudioStreamingRevenueReport:", error);
+            console.error("Error in getAudioStreamingRevenueSummary:", error);
             next(error);
         }
     }
 
-    // getYoutubeRevenueReport method
-    async getYoutubeRevenueReport(req, res, next) {
+    // getAudioStreamingRevenueReports method
+    async getAudioStreamingRevenueReports(req, res, next) {
         try {
             const {
-                labelId,
-                platform,
-                year,
-                month,
-                fromDate,
-                toDate,
-                releases,
-                artist,
-                track,
-                partner,
-                contentType,
-                format,
-                territory,
-                quarters,
-                page = 1,
-                limit = 10,
+                labelId, platform, year, month, fromDate, toDate,
+                releases, artist, track, territory,
+                page = 1, limit = 10
             } = req.query;
 
             const { role, userId } = req.user;
 
-            const userFilter = {};
-
-            if (userId && role) {
-                if (role !== "Super Admin" && role !== "Manager") {
-                    // For non-Super Admin/Manager users, get child users
-                    const users = await User.find({ parent_id: userId }, { id: 1 });
-                    const childIds = users.map(u => u.id);
-                    childIds.push(userId);
-                    userFilter.user_id = { $in: childIds };
-                }
+            // === Build filter (same as original) ===
+            const filter = {};
+            if (role && role !== "Super Admin" && role !== "Manager") {
+                const users = await User.find({ parent_id: userId }, { id: 1 }).lean();
+                const childIds = users.map(u => u.id);
+                childIds.push(userId);
+                filter.user_id = { $in: childIds };
             }
+            if (labelId) filter.user_id = Number(labelId);
+
+            const defaultRetailers = ["Apple Music", "Spotify", "Gaana", "Jio Saavn", "Facebook", "Amazon", "TikTok"];
+            if (platform && platform !== "") {
+                filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
+            } else {
+                filter.retailer = { $in: defaultRetailers };
+            }
+
+            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
+            if (year && !month && !fromDate && !toDate) {
+                filter.date = { $gte: `${selectedYear}-01-01`, $lte: `${selectedYear}-12-31` };
+            }
+            if (month) {
+                const start = new Date(selectedYear, parseInt(month) - 1, 1);
+                const end = new Date(selectedYear, parseInt(month), 0);
+                filter.date = { $gte: start.toISOString().split("T")[0], $lte: end.toISOString().split("T")[0] };
+            }
+            if (fromDate && toDate) {
+                const [fy, fm] = fromDate.split("-").map(Number);
+                const [ty, tm] = toDate.split("-").map(Number);
+                filter.date = {
+                    $gte: new Date(fy, fm - 1, 1).toISOString().split("T")[0],
+                    $lte: new Date(ty, tm, 0).toISOString().split("T")[0]
+                };
+            }
+
+            if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
+            if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
+            if (releases === "true") filter.release = { $nin: ["", null, undefined] };
+
+            const pageNum = parseInt(page);
+            const limitNum = parseInt(limit);
+            const skipNum = (pageNum - 1) * limitNum;
+
+            // === Step 1: Daily aggregation for deduction calculation ===
+            const dailyPipeline = [
+                { $match: filter },
+                {
+                    $addFields: {
+                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } }
+                    }
+                },
+                {
+                    $group: {
+                        _id: { user_id: "$user_id", date: "$date" },
+                        dailyRevenue: { $sum: "$revenueNum" }
+                    }
+                },
+                {
+                    $project: {
+                        user_id: "$_id.user_id",
+                        date: "$_id.date",
+                        dailyRevenue: 1,
+                        _id: 0
+                    }
+                }
+            ];
+
+            const dailyData = await TblReport2025.aggregate(dailyPipeline).allowDiskUse(true);
+
+            // === Step 2: Fetch contracts ===
+            const uniqueUserIds = [...new Set(dailyData.map(d => d.user_id).filter(Boolean))];
+            const contracts = uniqueUserIds.length > 0
+                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+                : [];
+
+            const contractMap = new Map();
+            contracts.forEach(c => {
+                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                contractMap.get(c.user_id).push(c);
+            });
+
+            // Apply deductions to daily data
+            const dailyDeducted = dailyData.map(item => {
+                let deducted = item.dailyRevenue;
+
+                const userContracts = contractMap.get(item.user_id) || [];
+                for (const contract of userContracts) {
+                    if (item.date >= contract.startDate && item.date <= contract.endDate) {
+                        const percentage = contract.labelPercentage || 0;
+                        deducted = item.dailyRevenue * ((100 - percentage) / 100);
+                        break;
+                    }
+                }
+
+                return { date: item.date, user_id: item.user_id, deductedRevenue: deducted };
+            });
+
+            // === Step 3: Artist Report ===
+            const artistPipeline = [
+                { $match: filter },
+                {
+                    $addFields: {
+                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } }
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            artist: { $ifNull: ["$track_artist", "Unknown Artist"] },
+                            user_id: "$user_id"
+                        },
+                        grossRevenue: { $sum: "$revenueNum" },
+                        sampleDate: { $first: "$date" },
+                        samplePlatform: { $first: "$retailer" },
+                        sampleRelease: { $first: "$release" }
+                    }
+                }
+            ];
+
+            const artistData = await TblReport2025.aggregate(artistPipeline).allowDiskUse(true);
+
+            // Apply deduction proportionally per artist
+            const artistReports = artistData.map(item => {
+                const userDaily = dailyDeducted.filter(d => d.user_id === item._id.user_id);
+                const totalGrossForUser = userDaily.reduce((s, d) => s + (dailyData.find(dd => dd.user_id === item._id.user_id && dd.date === d.date)?.dailyRevenue || 0), 0);
+                const totalDeductedForUser = userDaily.reduce((s, d) => s + d.deductedRevenue, 0);
+
+                const deductionRatio = totalGrossForUser > 0 ? totalDeductedForUser / totalGrossForUser : 1;
+
+                return {
+                    artist: item._id.artist,
+                    revenue: Number((item.grossRevenue * deductionRatio).toFixed(2)),
+                    date: item.sampleDate,
+                    platform: item.samplePlatform || "Various",
+                    release: item.sampleRelease || "Various",
+                    user_id: item._id.user_id
+                };
+            })
+                .sort((a, b) => b.revenue - a.revenue);
+
+            const totalRecords = artistReports.length;
+            const paginatedReports = artistReports.slice(skipNum, skipNum + limitNum);
+
+            // === Response ===
+            res.json({
+                success: true,
+                data: {
+                    reports: paginatedReports,
+                    pagination: {
+                        totalRecords,
+                        totalPages: Math.ceil(totalRecords / limitNum),
+                        currentPage: pageNum,
+                        limit: limitNum
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error("Error in getAudioStreamingRevenueReports:", error);
+            next(error);
+        }
+    }
+
+    // getYoutubeRevenueSummary method
+    async getYoutubeRevenueSummary(req, res, next) {
+        try {
+            const {
+                labelId, platform, year, month, fromDate, toDate,
+                releases, artist, track, territory
+            } = req.query;
+
+            const { role, userId } = req.user;
+
+            // === Build filter (same as original) ===
+            const filter = {};
+            if (role && role !== "Super Admin" && role !== "Manager") {
+                const users = await User.find({ parent_id: userId }, { id: 1 }).lean();
+                const childIds = users.map(u => u.id);
+                childIds.push(userId);
+                filter.user_id = { $in: childIds };
+            }
+            if (labelId) filter.user_id = Number(labelId);
 
             const defaultRetailers = [
                 "Sound Recording (Audio Claim)",
@@ -974,295 +1102,354 @@ class revenueUploadController {
                 "YouTubeVideoClaim",
                 "YTPremiumRevenue",
             ];
-
-            // -------- BUILD FILTER --------
-            const filter = { ...userFilter };
-
-            if (labelId) {
-                filter.user_id = Number(labelId);
-            }
-
             if (platform && platform !== "") {
-                const platforms = platform.split(",").map(p => p.trim());
-                filter.retailer = { $in: platforms };
+                filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
             } else {
                 filter.retailer = { $in: defaultRetailers };
             }
 
             const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-
-            // Year only
             if (year && !month && !fromDate && !toDate) {
-                filter.date = {
-                    $gte: `${selectedYear}-01-01`,
-                    $lte: `${selectedYear}-12-31`
-                };
+                filter.date = { $gte: `${selectedYear}-01-01`, $lte: `${selectedYear}-12-31` };
             }
-
-            // Month + Year
-            if (month && month !== '') {
-                const startDate = new Date(selectedYear, parseInt(month) - 1, 1);
-                const endDate = new Date(selectedYear, parseInt(month), 0);
-                filter.date = {
-                    $gte: startDate.toISOString().split("T")[0],
-                    $lte: endDate.toISOString().split("T")[0]
-                };
+            if (month) {
+                const start = new Date(selectedYear, parseInt(month) - 1, 1);
+                const end = new Date(selectedYear, parseInt(month), 0);
+                filter.date = { $gte: start.toISOString().split("T")[0], $lte: end.toISOString().split("T")[0] };
             }
-
-            // Custom date range
             if (fromDate && toDate) {
-                const [fromYear, fromMonth] = fromDate.split("-").map(Number);
-                const [toYear, toMonth] = toDate.split("-").map(Number);
-
-                const startDate = new Date(fromYear, fromMonth - 1, 1);
-                const endDate = new Date(toYear, toMonth, 0);
-
+                const [fy, fm] = fromDate.split("-").map(Number);
+                const [ty, tm] = toDate.split("-").map(Number);
                 filter.date = {
-                    $gte: startDate.toISOString().split("T")[0],
-                    $lte: endDate.toISOString().split("T")[0]
+                    $gte: new Date(fy, fm - 1, 1).toISOString().split("T")[0],
+                    $lte: new Date(ty, tm, 0).toISOString().split("T")[0]
                 };
             }
 
-            // Checkbox filters
             if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
             if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
             if (releases === "true") filter.release = { $nin: ["", null, undefined] };
 
-            // Convert net_total safely
-            const addSafeRevenue = {
-                $addFields: {
-                    safeRevenue: {
-                        $convert: {
-                            input: "$net_total",
-                            to: "double",
-                            onError: 0,
-                            onNull: 0
-                        }
-                    }
-                }
-            };
-
-            // ========== GET ALL REVENUE DATA FIRST ==========
-            const detailedPipeline = [
+            // === Step 1: Daily aggregation for revenue and streams ===
+            const dailyPipeline = [
                 { $match: filter },
-                addSafeRevenue,
+                {
+                    $addFields: {
+                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } },
+                        streamsNum: { $convert: { input: "$track_count", to: "long", onError: 0, onNull: 0 } }
+                    }
+                },
+                {
+                    $group: {
+                        _id: { user_id: "$user_id", date: "$date" },
+                        dailyRevenue: { $sum: "$revenueNum" },
+                        dailyStreams: { $sum: "$streamsNum" }
+                    }
+                },
                 {
                     $project: {
-                        date: 1,
-                        retailer: 1,
-                        release: 1,
-                        track_artist: 1,
-                        safeRevenue: 1,
-                        user_id: 1,
-                        territory: 1,
-                        track_count: 1
+                        user_id: "$_id.user_id",
+                        date: "$_id.date",
+                        dailyRevenue: 1,
+                        dailyStreams: 1,
+                        _id: 0
                     }
                 }
             ];
 
-            const detailedData = await TblReport2025.aggregate(detailedPipeline);
+            const dailyData = await TblReport2025.aggregate(dailyPipeline).allowDiskUse(true);
 
-            // ========== GET ALL CONTRACTS ==========
-            // Get all unique user_ids from the data
-            const allUserIds = [...new Set(detailedData.map(item => item.user_id).filter(id => id !== null))];
+            // === Step 2: Fetch contracts and apply deductions ===
+            const uniqueUserIds = [...new Set(dailyData.map(d => d.user_id).filter(Boolean))];
+            const contracts = uniqueUserIds.length > 0
+                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+                : [];
 
-            // Get contracts for these users
-            let allContracts = [];
-            if (allUserIds.length > 0) {
-                allContracts = await Contract.find({
-                    user_id: { $in: allUserIds },
-                    status: "active"
-                }).lean();
-            }
+            const contractMap = new Map();
+            contracts.forEach(c => {
+                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                contractMap.get(c.user_id).push(c);
+            });
 
-            // ========== APPLY CONTRACT DEDUCTION TO EACH REVENUE ENTRY ==========
-            const processedData = detailedData.map(item => {
-                let deductedRevenue = item.safeRevenue;
-                let appliedPercentage = 0;
-                let contractApplied = false;
+            // Apply deductions
+            let totalDeductedRevenue = 0;
+            let totalStreams = 0;
+            let entriesWithDeduction = 0;
+            let sumDeductionPercent = 0;
 
-                // Find matching contract for this user and date
-                if (item.user_id && allContracts.length > 0) {
-                    const userContracts = allContracts.filter(contract =>
-                        contract.user_id === item.user_id
-                    );
+            dailyData.forEach(item => {
+                let deducted = item.dailyRevenue;
+                let percentage = 0;
+                let applied = false;
 
-                    // Check each contract to see if the revenue date falls within contract dates
-                    for (const contract of userContracts) {
-                        // Compare dates as strings (YYYY-MM-DD format)
-                        if (item.date >= contract.startDate && item.date <= contract.endDate) {
-                            // Apply deduction for this contract
-                            const labelPercentage = contract.labelPercentage || 0;
-                            const deductionMultiplier = (100 - labelPercentage) / 100;
-                            deductedRevenue = item.safeRevenue * deductionMultiplier;
-                            appliedPercentage = labelPercentage;
-                            contractApplied = true;
-                            break; // Use first matching contract
-                        }
+                const userContracts = contractMap.get(item.user_id) || [];
+                for (const contract of userContracts) {
+                    if (item.date >= contract.startDate && item.date <= contract.endDate) {
+                        percentage = contract.labelPercentage || 0;
+                        deducted = item.dailyRevenue * ((100 - percentage) / 100);
+                        applied = true;
+                        break;
                     }
                 }
 
-                return {
-                    ...item,
-                    deductedRevenue: deductedRevenue,
-                    originalRevenue: item.safeRevenue,
-                    contractApplied: contractApplied,
-                    deductionPercentage: appliedPercentage
-                };
-            });
-
-            // ========== CALCULATE AGGREGATIONS ==========
-
-            // 1. Group by artist for main table
-            const artistGroups = {};
-            processedData.forEach(item => {
-                const artist = item.track_artist || "Unknown Artist";
-                if (!artistGroups[artist]) {
-                    artistGroups[artist] = {
-                        totalRevenue: 0,
-                        user_id: item.user_id,
-                        firstDate: item.date,
-                        firstRetailer: item.retailer,
-                        firstRelease: item.release,
-                        artistName: artist
-                    };
+                if (applied) {
+                    entriesWithDeduction++;
+                    sumDeductionPercent += percentage;
                 }
 
-                artistGroups[artist].totalRevenue += item.deductedRevenue;
+                totalDeductedRevenue += deducted;
+                totalStreams += item.dailyStreams;
             });
 
-            // Convert to array and sort
-            const allArtistsData = Object.values(artistGroups)
-                .map(item => ({
-                    date: item.firstDate,
-                    platform: item.firstRetailer,
-                    artist: item.artistName,
-                    release: item.firstRelease,
-                    revenue: Number(item.totalRevenue.toFixed(2)),
-                    user_id: item.user_id
-                }))
-                .sort((a, b) => b.revenue - a.revenue);
+            const avgDeductionPercentage = entriesWithDeduction > 0 ? sumDeductionPercent / entriesWithDeduction : 0;
 
-            // Apply pagination
-            const startIndex = (parseInt(page) - 1) * parseInt(limit);
-            const endIndex = startIndex + parseInt(limit);
-            const paginatedResult = allArtistsData.slice(startIndex, endIndex);
-
-            // 2. Count total artists
-            const totalRecords = Object.keys(artistGroups).length;
-            const totalPages = Math.ceil(totalRecords / parseInt(limit));
-
-            // 3. Summary (total streams and revenue)
-            const summary = processedData.reduce((acc, item) => {
-                acc.totalStreams += parseInt(item.track_count) || 0;
-                acc.totalRevenue += item.deductedRevenue;
-                return acc;
-            }, { totalStreams: 0, totalRevenue: 0 });
-
-            // 4. Revenue by Month
-            const monthGroups = {};
-            processedData.forEach(item => {
-                const date = new Date(item.date);
-                const monthKey = `${date.toLocaleString('default', { month: 'short' })} ${date.getFullYear()}`;
-
-                if (!monthGroups[monthKey]) {
-                    monthGroups[monthKey] = 0;
+            // === Step 3: Charts data ===
+            const chartPipeline = [
+                { $match: filter },
+                {
+                    $addFields: {
+                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } }
+                    }
+                },
+                {
+                    $facet: {
+                        byMonth: [
+                            { $group: { _id: { $dateToString: { format: "%b %Y", date: { $dateFromString: { dateString: "$date" } } } }, revenue: { $sum: "$revenueNum" } } },
+                            { $sort: { _id: 1 } },
+                            { $project: { month: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
+                        ],
+                        byPlatform: [
+                            { $group: { _id: { $ifNull: ["$retailer", "Unknown"] }, revenue: { $sum: "$revenueNum" } } },
+                            { $sort: { revenue: -1 } },
+                            { $project: { platform: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
+                        ],
+                        byCountry: [
+                            { $group: { _id: { $ifNull: ["$territory", "Unknown"] }, revenue: { $sum: "$revenueNum" } } },
+                            { $sort: { revenue: -1 } },
+                            { $limit: 10 },
+                            { $project: { country: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
+                        ]
+                    }
                 }
+            ];
 
-                monthGroups[monthKey] += item.deductedRevenue;
-            });
+            const [chartResult] = await TblReport2025.aggregate(chartPipeline).allowDiskUse(true);
 
-            const byMonthResult = Object.entries(monthGroups)
-                .map(([monthLabel, revenue]) => ({ monthLabel, revenue: Number(revenue.toFixed(2)) }))
-                .sort((a, b) => {
-                    const dateA = new Date(a.monthLabel);
-                    const dateB = new Date(b.monthLabel);
-                    return dateA - dateB;
-                });
+            // Apply global deduction ratio to charts
+            const grossTotal = chartResult.byMonth.reduce((s, m) => s + m.revenue, 0);
+            const deductionRatio = grossTotal > 0 ? totalDeductedRevenue / grossTotal : 1;
 
-            // 5. Revenue by Channel
-            const channelGroups = {};
-            processedData.forEach(item => {
-                const channel = item.retailer || "Unknown";
-                if (!channelGroups[channel]) {
-                    channelGroups[channel] = 0;
-                }
+            const revenueByMonth = Object.fromEntries(
+                chartResult.byMonth.map(m => [m.month, Number((m.revenue * deductionRatio).toFixed(2))])
+            );
+            const revenueByChannel = Object.fromEntries(
+                chartResult.byPlatform.map(p => [p.platform, Number((p.revenue * deductionRatio).toFixed(2))])
+            );
+            const revenueByCountry = Object.fromEntries(
+                chartResult.byCountry.map(c => [c.country, Number((c.revenue * deductionRatio).toFixed(2))])
+            );
 
-                channelGroups[channel] += item.deductedRevenue;
-            });
-
-            const byChannelResult = Object.entries(channelGroups)
-                .map(([platform, revenue]) => ({ platform, revenue: Number(revenue.toFixed(2)) }))
-                .sort((a, b) => b.revenue - a.revenue);
-
-            // 6. Revenue by Country
-            const countryGroups = {};
-            processedData.forEach(item => {
-                const country = item.territory || "Unknown";
-                if (!countryGroups[country]) {
-                    countryGroups[country] = 0;
-                }
-
-                countryGroups[country] += item.deductedRevenue;
-            });
-
-            const byCountryResult = Object.entries(countryGroups)
-                .map(([country, revenue]) => ({ country, revenue: Number(revenue.toFixed(2)) }))
-                .sort((a, b) => b.revenue - a.revenue)
-                .slice(0, 10);
-
-            // Calculate stats about deductions
-            const entriesWithDeduction = processedData.filter(item => item.contractApplied).length;
-            const totalEntries = processedData.length;
-            let avgDeductionPercentage = 0;
-
-            if (entriesWithDeduction > 0) {
-                const totalDeduction = processedData
-                    .filter(item => item.contractApplied)
-                    .reduce((sum, item) => sum + item.deductionPercentage, 0);
-                avgDeductionPercentage = totalDeduction / entriesWithDeduction;
-            }
-
-            // Format revenueByChannel object with default retailers
-            // const revenueByChannel = {};
-            // defaultRetailers.forEach(platform => {
-            //     const found = byChannelResult.find(item => item.platform === platform);
-            //     revenueByChannel[platform] = found ? found.revenue : 0;
-            // });
-
-            // Format response
+            // === Response ===
             res.json({
                 success: true,
                 data: {
                     summary: {
-                        totalStreams: summary.totalStreams,
-                        totalRevenue: Number(summary.totalRevenue.toFixed(2)),
+                        totalStreams: totalStreams || 0,
+                        totalRevenue: Number(totalDeductedRevenue.toFixed(2)),
                         deductionApplied: entriesWithDeduction > 0,
-                        deductionPercentage: avgDeductionPercentage,
-                        entriesWithDeduction: entriesWithDeduction,
-                        totalEntries: totalEntries
+                        deductionPercentage: Number(avgDeductionPercentage.toFixed(2)),
+                        entriesWithDeduction,
+                        totalEntries: dailyData.length
                     },
-                    reports: paginatedResult,
-                    pagination: {
-                        totalRecords,
-                        totalPages,
-                        currentPage: parseInt(page),
-                        limit: parseInt(limit)
-                    },
-                    revenueByMonth: Object.fromEntries(
-                        byMonthResult.map(item => [item.monthLabel, item.revenue])
-                    ),
-                    revenueByChannel: Object.fromEntries(
-                        byChannelResult.map(item => [item.platform || "Unknown", item.revenue])
-                    ),
-                    revenueByCountry: Object.fromEntries(
-                        byCountryResult.map(item => [item.country || "Unknown", item.revenue])
-                    )
+                    revenueByMonth,
+                    revenueByChannel,
+                    revenueByCountry
                 }
             });
 
         } catch (error) {
-            console.error("Error in getRevenueReport:", error);
+            console.error("Error in getAudioStreamingRevenueSummary:", error);
+            next(error);
+        }
+    }
+
+    // getYoutubeRevenueReports method
+    async getYoutubeRevenueReports(req, res, next) {
+        try {
+            const {
+                labelId, platform, year, month, fromDate, toDate,
+                releases, artist, track, territory,
+                page = 1, limit = 10
+            } = req.query;
+
+            const { role, userId } = req.user;
+
+            // === Build filter (same as original) ===
+            const filter = {};
+            if (role && role !== "Super Admin" && role !== "Manager") {
+                const users = await User.find({ parent_id: userId }, { id: 1 }).lean();
+                const childIds = users.map(u => u.id);
+                childIds.push(userId);
+                filter.user_id = { $in: childIds };
+            }
+            if (labelId) filter.user_id = Number(labelId);
+
+            const defaultRetailers = [
+                "Sound Recording (Audio Claim)",
+                "Art Track (YouTube Music)",
+                "YouTubePartnerChannel",
+                "YouTubeRDCChannel",
+                "YouTubeVideoClaim",
+                "YTPremiumRevenue",
+            ];
+            if (platform && platform !== "") {
+                filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
+            } else {
+                filter.retailer = { $in: defaultRetailers };
+            }
+
+            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
+            if (year && !month && !fromDate && !toDate) {
+                filter.date = { $gte: `${selectedYear}-01-01`, $lte: `${selectedYear}-12-31` };
+            }
+            if (month) {
+                const start = new Date(selectedYear, parseInt(month) - 1, 1);
+                const end = new Date(selectedYear, parseInt(month), 0);
+                filter.date = { $gte: start.toISOString().split("T")[0], $lte: end.toISOString().split("T")[0] };
+            }
+            if (fromDate && toDate) {
+                const [fy, fm] = fromDate.split("-").map(Number);
+                const [ty, tm] = toDate.split("-").map(Number);
+                filter.date = {
+                    $gte: new Date(fy, fm - 1, 1).toISOString().split("T")[0],
+                    $lte: new Date(ty, tm, 0).toISOString().split("T")[0]
+                };
+            }
+
+            if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
+            if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
+            if (releases === "true") filter.release = { $nin: ["", null, undefined] };
+
+            const pageNum = parseInt(page);
+            const limitNum = parseInt(limit);
+            const skipNum = (pageNum - 1) * limitNum;
+
+            // === Step 1: Daily aggregation for deduction calculation ===
+            const dailyPipeline = [
+                { $match: filter },
+                {
+                    $addFields: {
+                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } }
+                    }
+                },
+                {
+                    $group: {
+                        _id: { user_id: "$user_id", date: "$date" },
+                        dailyRevenue: { $sum: "$revenueNum" }
+                    }
+                },
+                {
+                    $project: {
+                        user_id: "$_id.user_id",
+                        date: "$_id.date",
+                        dailyRevenue: 1,
+                        _id: 0
+                    }
+                }
+            ];
+
+            const dailyData = await TblReport2025.aggregate(dailyPipeline).allowDiskUse(true);
+
+            // === Step 2: Fetch contracts ===
+            const uniqueUserIds = [...new Set(dailyData.map(d => d.user_id).filter(Boolean))];
+            const contracts = uniqueUserIds.length > 0
+                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+                : [];
+
+            const contractMap = new Map();
+            contracts.forEach(c => {
+                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                contractMap.get(c.user_id).push(c);
+            });
+
+            // Apply deductions to daily data
+            const dailyDeducted = dailyData.map(item => {
+                let deducted = item.dailyRevenue;
+
+                const userContracts = contractMap.get(item.user_id) || [];
+                for (const contract of userContracts) {
+                    if (item.date >= contract.startDate && item.date <= contract.endDate) {
+                        const percentage = contract.labelPercentage || 0;
+                        deducted = item.dailyRevenue * ((100 - percentage) / 100);
+                        break;
+                    }
+                }
+
+                return { date: item.date, user_id: item.user_id, deductedRevenue: deducted };
+            });
+
+            // === Step 3: Artist Report ===
+            const artistPipeline = [
+                { $match: filter },
+                {
+                    $addFields: {
+                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } }
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            artist: { $ifNull: ["$track_artist", "Unknown Artist"] },
+                            user_id: "$user_id"
+                        },
+                        grossRevenue: { $sum: "$revenueNum" },
+                        sampleDate: { $first: "$date" },
+                        samplePlatform: { $first: "$retailer" },
+                        sampleRelease: { $first: "$release" }
+                    }
+                }
+            ];
+
+            const artistData = await TblReport2025.aggregate(artistPipeline).allowDiskUse(true);
+
+            // Apply deduction proportionally per artist
+            const artistReports = artistData.map(item => {
+                const userDaily = dailyDeducted.filter(d => d.user_id === item._id.user_id);
+                const totalGrossForUser = userDaily.reduce((s, d) => s + (dailyData.find(dd => dd.user_id === item._id.user_id && dd.date === d.date)?.dailyRevenue || 0), 0);
+                const totalDeductedForUser = userDaily.reduce((s, d) => s + d.deductedRevenue, 0);
+
+                const deductionRatio = totalGrossForUser > 0 ? totalDeductedForUser / totalGrossForUser : 1;
+
+                return {
+                    artist: item._id.artist,
+                    revenue: Number((item.grossRevenue * deductionRatio).toFixed(2)),
+                    date: item.sampleDate,
+                    platform: item.samplePlatform || "Various",
+                    release: item.sampleRelease || "Various",
+                    user_id: item._id.user_id
+                };
+            })
+                .sort((a, b) => b.revenue - a.revenue);
+
+            const totalRecords = artistReports.length;
+            const paginatedReports = artistReports.slice(skipNum, skipNum + limitNum);
+
+            // === Response ===
+            res.json({
+                success: true,
+                data: {
+                    reports: paginatedReports,
+                    pagination: {
+                        totalRecords,
+                        totalPages: Math.ceil(totalRecords / limitNum),
+                        currentPage: pageNum,
+                        limit: limitNum
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error("Error in getAudioStreamingRevenueReports:", error);
             next(error);
         }
     }
@@ -1502,8 +1689,6 @@ class revenueUploadController {
             }
 
             // Use CSV instead of XLSX — safe for large data
-            const Papa = require('papaparse');
-
             const excludeFields = ["_id", "__v", "createdAt", "updatedAt"];
             const sampleRow = data[0];
             let headers = ["S.No"];
@@ -1538,7 +1723,7 @@ class revenueUploadController {
 
             const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
             const randomSuffix = Math.random().toString(36).substring(2, 8);
-            const filename = `Revenue_Report_${timestamp}_${randomSuffix}.xlsx`;
+            const filename = `Revenue_Report_${timestamp}_${randomSuffix}.csv`;
 
             const relativeFolder = 'reports';
             const absoluteFolder = path.join(__dirname, '../uploads', relativeFolder);
@@ -2216,7 +2401,8 @@ class revenueUploadController {
                     user_id: userId || 0,
                     uploadId,
 
-                    retailer: 'Art Track (YouTube Music)',
+                    // retailer: 'Art Track (YouTube Music)',
+                    retailer: 'Facebook',
                     label: value.label_name || null,
 
                     upc_code: null,
