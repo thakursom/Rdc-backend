@@ -1873,7 +1873,7 @@ class revenueUploadController {
             if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
             if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
             if (releases === "true") filter.release = { $nin: ["", null, undefined] };
-            g
+
             const pipeline = [
                 { $match: filter },
                 { $sort: { date: -1 } },
