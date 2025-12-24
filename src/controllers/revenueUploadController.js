@@ -6,6 +6,7 @@ const { parser } = require('stream-json');
 const { streamArray } = require('stream-json/streamers/StreamArray');
 const mongoose = require("mongoose");
 const Papa = require('papaparse');
+const fastCsv = require('fast-csv');
 
 const LogService = require("../services/logService");
 const User = require("../models/userModel");
@@ -1608,98 +1609,11 @@ class revenueUploadController {
                 await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
                     status: 'failed',
                     error: 'No data found',
-                    completedAt: new Date()
                 });
                 return;
             }
 
-            let data = [];
-
-            if (count > 100000) {
-                console.log(`Large dataset detected (${count} records). Processing without sort in batches...`);
-
-                // For very large datasets, skip sorting or sort in application
-                const batchSize = 50000;
-
-                for (let skip = 0; skip < count; skip += batchSize) {
-                    console.log(`Processing batch ${Math.floor(skip / batchSize) + 1}/${Math.ceil(count / batchSize)}`);
-
-                    const batch = await TblReport2025.find(filter)
-                        .select('-__v -createdAt -updatedAt')
-                        .skip(skip)
-                        .limit(batchSize)
-                        .lean();
-
-                    data = data.concat(batch);
-                }
-
-                if (data.length > 0) {
-                    console.log(`Sorting ${data.length} records in memory...`);
-                    data.sort((a, b) => new Date(b.date) - new Date(a.date));
-                }
-            } else {
-                console.log(`Processing ${count} records using aggregation...`);
-
-                const collection = mongoose.connection.db.collection('tblreport_2025');
-                const cursor = collection.aggregate(pipeline, {
-                    allowDiskUse: true,
-                    cursor: { batchSize: 10000 }
-                });
-
-                for await (const doc of cursor) {
-                    data.push(doc);
-
-                    if (data.length % 10000 === 0) {
-                        console.log(`Processed ${data.length} records...`);
-                    }
-                }
-
-                cursor.close();
-            }
-
-            console.log(`Collected ${data.length} records for Excel generation`);
-
-            if (data.length === 0) {
-                await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
-                    status: 'failed',
-                    error: 'No data found',
-                    completedAt: new Date()
-                });
-                return;
-            }
-
-            const excludeFields = ["_id", "__v", "createdAt", "updatedAt"];
-            const sampleRow = data[0];
-            let headers = ["S.No"];
-
-            // Build headers: all keys except excluded, + date at end
-            Object.keys(sampleRow).forEach(key => {
-                if (!excludeFields.includes(key) && key !== "date") {
-                    headers.push(key);
-                }
-            });
-            headers.push("date");
-
-            const rows = data.map((row, index) => {
-                const rowData = [index + 1]; // S.No
-
-                Object.keys(sampleRow).forEach(key => {
-                    if (!excludeFields.includes(key) && key !== "date") {
-                        rowData.push(row[key] ?? "");
-                    }
-                });
-                rowData.push(row.date ?? "");
-
-                return rowData;
-            });
-
-            const csvContent = Papa.unparse([headers, ...rows], {
-                quotes: true,
-                delimiter: ",",
-                header: true,
-                newline: "\r\n"
-            });
-
+            // NEW: Create file path early
             const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
             const randomSuffix = Math.random().toString(36).substring(2, 8);
             const filename = `Revenue_Report_${timestamp}_${randomSuffix}.csv`;
@@ -1715,23 +1629,92 @@ class revenueUploadController {
             const relativePath = `uploads/reports/${filename}`;
             const fileURL = `${process.env.BASE_URL}/${relativePath}`;
 
-            fs.writeFileSync(absoluteFilePath, csvContent);
-            console.log(`CSV report saved: ${absoluteFilePath} (${data.length} rows)`);
+            // NEW: Streaming approach – no more huge "data" array!
+            const writeStream = fs.createWriteStream(absoluteFilePath);
 
+            // We'll write headers after getting the first document (dynamic headers)
+            let headersWritten = false;
+            let headers = ["S.No"];
+            let rowIndex = 1;
+
+            const excludeFields = ["_id", "__v", "createdAt", "updatedAt"];
+
+            // Use aggregation cursor for true streaming (low memory)
+            const collection = mongoose.connection.db.collection('tblreport_2025');
+            const cursor = collection.aggregate(pipeline, {
+                allowDiskUse: true,
+                cursor: { batchSize: 1000 } // Adjust batch size if needed
+            });
+
+            // Create a fast-csv formatter that writes directly to file
+            const csvStream = fastCsv.format({ headers: false, includeEndRowDelimiter: true });
+
+            csvStream.pipe(writeStream);
+
+            let firstDoc = true;
+
+            for await (const doc of cursor) {
+                if (firstDoc) {
+                    // Build headers from first document (same as your original code)
+                    Object.keys(doc).forEach(key => {
+                        if (!excludeFields.includes(key) && key !== "date") {
+                            headers.push(key);
+                        }
+                    });
+                    headers.push("date");
+
+                    // Write header row
+                    csvStream.write(headers);
+                    headersWritten = true;
+                    firstDoc = false;
+                }
+
+                // Build row data
+                const rowData = [rowIndex++];
+
+                Object.keys(doc).forEach(key => {
+                    if (!excludeFields.includes(key) && key !== "date") {
+                        rowData.push(doc[key] ?? "");
+                    }
+                });
+                rowData.push(doc.date ?? "");
+
+                csvStream.write(rowData);
+
+                // Optional: log progress
+                if (rowIndex % 10000 === 0) {
+                    console.log(`Streamed ${rowIndex} rows...`);
+                }
+            }
+
+            // End the streams
+            csvStream.end();
+            cursor.close();
+
+            // Wait for file to finish writing
+            await new Promise((resolve, reject) => {
+                writeStream.on('finish', resolve);
+                writeStream.on('error', reject);
+            });
+
+            console.log(`CSV report saved: ${absoluteFilePath} (${rowIndex - 1} rows)`);
+
+            // Update history
             await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
                 status: 'ready',
                 filename,
                 filePath: relativePath,
                 fileURL,
-                recordCount: data.length,
-                completedAt: new Date()
             });
 
             console.log(`Report ${reportId} successfully generated as CSV`);
 
         } catch (error) {
             console.error(`Error processing report ${reportId}:`, error);
-            // Re-throw error if needed for monitoring
+            await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
+                status: 'failed',
+                error: error.message || 'Unknown error',
+            });
             throw error;
         }
     }
@@ -1886,101 +1869,14 @@ class revenueUploadController {
             console.log(`Total records found for report ${reportId}: ${count}`);
 
             if (count === 0) {
-                await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
-                    status: 'failed',
-                    error: 'No data found',
-                    completedAt: new Date()
-                });
-                return;
-            }
-
-            let data = [];
-
-            if (count > 100000) {
-                console.log(`Large dataset detected (${count} records). Processing without sort in batches...`);
-
-                // For very large datasets, skip sorting or sort in application
-                const batchSize = 50000;
-
-                for (let skip = 0; skip < count; skip += batchSize) {
-                    console.log(`Processing batch ${Math.floor(skip / batchSize) + 1}/${Math.ceil(count / batchSize)}`);
-
-                    const batch = await TblReport2025.find(filter)
-                        .select('-__v -createdAt -updatedAt')
-                        .skip(skip)
-                        .limit(batchSize)
-                        .lean();
-
-                    data = data.concat(batch);
-                }
-
-                if (data.length > 0) {
-                    console.log(`Sorting ${data.length} records in memory...`);
-                    data.sort((a, b) => new Date(b.date) - new Date(a.date));
-                }
-            } else {
-                console.log(`Processing ${count} records using aggregation...`);
-
-                const collection = mongoose.connection.db.collection('tblreport_2025');
-                const cursor = collection.aggregate(pipeline, {
-                    allowDiskUse: true,
-                    cursor: { batchSize: 10000 }
-                });
-
-                for await (const doc of cursor) {
-                    data.push(doc);
-
-                    if (data.length % 10000 === 0) {
-                        console.log(`Processed ${data.length} records...`);
-                    }
-                }
-
-                cursor.close();
-            }
-
-            console.log(`Collected ${data.length} records for Excel generation`);
-
-            if (data.length === 0) {
                 await YoutubeReportHistory.findByIdAndUpdate(reportId, {
                     status: 'failed',
                     error: 'No data found',
-                    completedAt: new Date()
                 });
                 return;
             }
 
-            const excludeFields = ["_id", "__v", "createdAt", "updatedAt"];
-            const sampleRow = data[0];
-            let headers = ["S.No"];
-
-            // Build headers: all keys except excluded, + date at end
-            Object.keys(sampleRow).forEach(key => {
-                if (!excludeFields.includes(key) && key !== "date") {
-                    headers.push(key);
-                }
-            });
-            headers.push("date");
-
-            const rows = data.map((row, index) => {
-                const rowData = [index + 1]; // S.No
-
-                Object.keys(sampleRow).forEach(key => {
-                    if (!excludeFields.includes(key) && key !== "date") {
-                        rowData.push(row[key] ?? "");
-                    }
-                });
-                rowData.push(row.date ?? "");
-
-                return rowData;
-            });
-
-            const csvContent = Papa.unparse([headers, ...rows], {
-                quotes: true,
-                delimiter: ",",
-                header: true,
-                newline: "\r\n"
-            });
-
+            // NEW: Create file path early
             const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
             const randomSuffix = Math.random().toString(36).substring(2, 8);
             const filename = `Revenue_Report_${timestamp}_${randomSuffix}.csv`;
@@ -1996,22 +1892,92 @@ class revenueUploadController {
             const relativePath = `uploads/reports/${filename}`;
             const fileURL = `${process.env.BASE_URL}/${relativePath}`;
 
-            fs.writeFileSync(absoluteFilePath, csvContent);
-            console.log(`CSV report saved: ${absoluteFilePath} (${data.length} rows)`);
+            // NEW: Streaming approach – no more huge "data" array!
+            const writeStream = fs.createWriteStream(absoluteFilePath);
 
+            // We'll write headers after getting the first document (dynamic headers)
+            let headersWritten = false;
+            let headers = ["S.No"];
+            let rowIndex = 1;
+
+            const excludeFields = ["_id", "__v", "createdAt", "updatedAt"];
+
+            // Use aggregation cursor for true streaming (low memory)
+            const collection = mongoose.connection.db.collection('tblreport_2025');
+            const cursor = collection.aggregate(pipeline, {
+                allowDiskUse: true,
+                cursor: { batchSize: 1000 } // Adjust batch size if needed
+            });
+
+            // Create a fast-csv formatter that writes directly to file
+            const csvStream = fastCsv.format({ headers: false, includeEndRowDelimiter: true });
+
+            csvStream.pipe(writeStream);
+
+            let firstDoc = true;
+
+            for await (const doc of cursor) {
+                if (firstDoc) {
+                    // Build headers from first document (same as your original code)
+                    Object.keys(doc).forEach(key => {
+                        if (!excludeFields.includes(key) && key !== "date") {
+                            headers.push(key);
+                        }
+                    });
+                    headers.push("date");
+
+                    // Write header row
+                    csvStream.write(headers);
+                    headersWritten = true;
+                    firstDoc = false;
+                }
+
+                // Build row data
+                const rowData = [rowIndex++];
+
+                Object.keys(doc).forEach(key => {
+                    if (!excludeFields.includes(key) && key !== "date") {
+                        rowData.push(doc[key] ?? "");
+                    }
+                });
+                rowData.push(doc.date ?? "");
+
+                csvStream.write(rowData);
+
+                // Optional: log progress
+                if (rowIndex % 10000 === 0) {
+                    console.log(`Streamed ${rowIndex} rows...`);
+                }
+            }
+
+            // End the streams
+            csvStream.end();
+            cursor.close();
+
+            // Wait for file to finish writing
+            await new Promise((resolve, reject) => {
+                writeStream.on('finish', resolve);
+                writeStream.on('error', reject);
+            });
+
+            console.log(`CSV report saved: ${absoluteFilePath} (${rowIndex - 1} rows)`);
+
+            // Update history
             await YoutubeReportHistory.findByIdAndUpdate(reportId, {
                 status: 'ready',
                 filename,
                 filePath: relativePath,
                 fileURL,
-                recordCount: data.length,
-                completedAt: new Date()
             });
 
             console.log(`Report ${reportId} successfully generated as CSV`);
 
         } catch (error) {
             console.error(`Error processing report ${reportId}:`, error);
+            await YoutubeReportHistory.findByIdAndUpdate(reportId, {
+                status: 'failed',
+                error: error.message || 'Unknown error',
+            });
             throw error;
         }
     }
