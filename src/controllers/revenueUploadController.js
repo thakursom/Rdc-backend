@@ -1592,8 +1592,7 @@ class revenueUploadController {
             if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
             if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
             if (releases === "true") filter.release = { $nin: ["", null, undefined] };
-
-            // OPTION 1: Use aggregation with disk use and batch processing
+            g
             const pipeline = [
                 { $match: filter },
                 { $sort: { date: -1 } },
@@ -1602,20 +1601,18 @@ class revenueUploadController {
 
             console.log(`Filter for report ${reportId}:`, JSON.stringify(filter, null, 2));
 
-            // First, get count to estimate size
             const count = await TblReport2025.countDocuments(filter);
             console.log(`Total records found for report ${reportId}: ${count}`);
 
-            // if (count === 0) {
-            // await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
-            //     status: 'failed',
-            //     error: 'No data found',
-            //     completedAt: new Date()
-            // });
-            //     return;
-            // }
+            if (count === 0) {
+                await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
+                    status: 'failed',
+                    error: 'No data found',
+                    completedAt: new Date()
+                });
+                return;
+            }
 
-            // For large datasets, process without sorting or with custom logic
             let data = [];
 
             if (count > 100000) {
@@ -1634,28 +1631,15 @@ class revenueUploadController {
                         .lean();
 
                     data = data.concat(batch);
-
-                    // Update progress
-                    // await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
-                    //     progress: Math.min(90, Math.floor((skip / count) * 100))
-                    // });
                 }
 
-                // Sort in memory if needed (but be careful with very large arrays)
                 if (data.length > 0) {
                     console.log(`Sorting ${data.length} records in memory...`);
                     data.sort((a, b) => new Date(b.date) - new Date(a.date));
                 }
             } else {
-                // For smaller datasets, use aggregation with disk use
                 console.log(`Processing ${count} records using aggregation...`);
 
-                // Update progress
-                // await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
-                //     progress: 50
-                // });
-
-                // Create a temporary collection or use aggregation with allowDiskUse
                 const collection = mongoose.connection.db.collection('tblreport_2025');
                 const cursor = collection.aggregate(pipeline, {
                     allowDiskUse: true,
@@ -1665,12 +1649,8 @@ class revenueUploadController {
                 for await (const doc of cursor) {
                     data.push(doc);
 
-                    // Update progress periodically
                     if (data.length % 10000 === 0) {
                         console.log(`Processed ${data.length} records...`);
-                        // await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
-                        //     progress: 50 + Math.floor((data.length / count) * 40)
-                        // });
                     }
                 }
 
@@ -1688,7 +1668,6 @@ class revenueUploadController {
                 return;
             }
 
-            // Use CSV instead of XLSX — safe for large data
             const excludeFields = ["_id", "__v", "createdAt", "updatedAt"];
             const sampleRow = data[0];
             let headers = ["S.No"];
@@ -1699,7 +1678,7 @@ class revenueUploadController {
                     headers.push(key);
                 }
             });
-            headers.push("date"); // date column last
+            headers.push("date");
 
             const rows = data.map((row, index) => {
                 const rowData = [index + 1]; // S.No
@@ -1805,7 +1784,7 @@ class revenueUploadController {
     // Process YouTube report
     async processYoutubeReport(reportId, filters) {
         try {
-            console.log(`Processing YouTube report ${reportId} with filters:`, filters);
+            console.log(`Processing report ${reportId} with filters:`, filters);
 
             const {
                 userId,
@@ -1894,46 +1873,117 @@ class revenueUploadController {
             if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
             if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
             if (releases === "true") filter.release = { $nin: ["", null, undefined] };
+            g
+            const pipeline = [
+                { $match: filter },
+                { $sort: { date: -1 } },
+                { $project: { __v: 0, createdAt: 0, updatedAt: 0 } }
+            ];
 
-            const data = await TblReport2025.find(filter)
-                .select('-__v')
-                .sort({ date: -1 })
-                .lean();
+            console.log(`Filter for report ${reportId}:`, JSON.stringify(filter, null, 2));
 
-            console.log(`Found ${data.length} records for YouTube report ${reportId}`);
+            const count = await TblReport2025.countDocuments(filter);
+            console.log(`Total records found for report ${reportId}: ${count}`);
 
-            if (data.length === 0) {
-                await YoutubeReportHistory.findByIdAndUpdate(reportId, {
+            if (count === 0) {
+                await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
                     status: 'failed',
-                    error: 'No data found'
+                    error: 'No data found',
+                    completedAt: new Date()
                 });
                 return;
             }
 
-            const excelData = [];
-            const rows = data.map(d => ({ ...d }));
-            const excludeFields = ["_id", "date", "createdAt", "updatedAt"];
+            let data = [];
 
-            const dataKeys = Object.keys(rows[0]).filter(
-                key => !excludeFields.includes(key)
-            );
+            if (count > 100000) {
+                console.log(`Large dataset detected (${count} records). Processing without sort in batches...`);
 
-            const headers = ["S.No", ...dataKeys];
-            excelData.push(headers);
+                // For very large datasets, skip sorting or sort in application
+                const batchSize = 50000;
 
-            rows.forEach((row, index) => {
-                excelData.push([
-                    index + 1,
-                    ...dataKeys.map(key => row[key])
-                ]);
+                for (let skip = 0; skip < count; skip += batchSize) {
+                    console.log(`Processing batch ${Math.floor(skip / batchSize) + 1}/${Math.ceil(count / batchSize)}`);
+
+                    const batch = await TblReport2025.find(filter)
+                        .select('-__v -createdAt -updatedAt')
+                        .skip(skip)
+                        .limit(batchSize)
+                        .lean();
+
+                    data = data.concat(batch);
+                }
+
+                if (data.length > 0) {
+                    console.log(`Sorting ${data.length} records in memory...`);
+                    data.sort((a, b) => new Date(b.date) - new Date(a.date));
+                }
+            } else {
+                console.log(`Processing ${count} records using aggregation...`);
+
+                const collection = mongoose.connection.db.collection('tblreport_2025');
+                const cursor = collection.aggregate(pipeline, {
+                    allowDiskUse: true,
+                    cursor: { batchSize: 10000 }
+                });
+
+                for await (const doc of cursor) {
+                    data.push(doc);
+
+                    if (data.length % 10000 === 0) {
+                        console.log(`Processed ${data.length} records...`);
+                    }
+                }
+
+                cursor.close();
+            }
+
+            console.log(`Collected ${data.length} records for Excel generation`);
+
+            if (data.length === 0) {
+                await YoutubeReportHistory.findByIdAndUpdate(reportId, {
+                    status: 'failed',
+                    error: 'No data found',
+                    completedAt: new Date()
+                });
+                return;
+            }
+
+            const excludeFields = ["_id", "__v", "createdAt", "updatedAt"];
+            const sampleRow = data[0];
+            let headers = ["S.No"];
+
+            // Build headers: all keys except excluded, + date at end
+            Object.keys(sampleRow).forEach(key => {
+                if (!excludeFields.includes(key) && key !== "date") {
+                    headers.push(key);
+                }
+            });
+            headers.push("date");
+
+            const rows = data.map((row, index) => {
+                const rowData = [index + 1]; // S.No
+
+                Object.keys(sampleRow).forEach(key => {
+                    if (!excludeFields.includes(key) && key !== "date") {
+                        rowData.push(row[key] ?? "");
+                    }
+                });
+                rowData.push(row.date ?? "");
+
+                return rowData;
             });
 
-            const workbook = XLSX.utils.book_new();
-            const worksheet = XLSX.utils.aoa_to_sheet(excelData);
-            XLSX.utils.book_append_sheet(workbook, worksheet, "YouTube Revenue Report");
+            const csvContent = Papa.unparse([headers, ...rows], {
+                quotes: true,
+                delimiter: ",",
+                header: true,
+                newline: "\r\n"
+            });
 
             const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
-            const filename = `YouTube_Revenue_Report_${timestamp}_${reportId}.xlsx`;
+            const randomSuffix = Math.random().toString(36).substring(2, 8);
+            const filename = `Revenue_Report_${timestamp}_${randomSuffix}.csv`;
 
             const relativeFolder = 'reports';
             const absoluteFolder = path.join(__dirname, '../uploads', relativeFolder);
@@ -1946,33 +1996,23 @@ class revenueUploadController {
             const relativePath = `uploads/reports/${filename}`;
             const fileURL = `${process.env.BASE_URL}/${relativePath}`;
 
-            const excelBuffer = XLSX.write(workbook, {
-                type: 'buffer',
-                bookType: 'xlsx',
-                bookSST: false
-            });
+            fs.writeFileSync(absoluteFilePath, csvContent);
+            console.log(`CSV report saved: ${absoluteFilePath} (${data.length} rows)`);
 
-            // Save file to public folder
-            fs.writeFileSync(absoluteFilePath, excelBuffer);
-            console.log(`YouTube Excel file saved for report ${reportId} at: ${absoluteFilePath}`);
-
-            // Update DB with relative path and public URL
             await YoutubeReportHistory.findByIdAndUpdate(reportId, {
                 status: 'ready',
-                filename: filename,
+                filename,
                 filePath: relativePath,
-                fileURL: fileURL
+                fileURL,
+                recordCount: data.length,
+                completedAt: new Date()
             });
 
-            console.log(`YouTube report ${reportId} processed successfully`);
+            console.log(`Report ${reportId} successfully generated as CSV`);
 
         } catch (error) {
-            console.error(`Error processing YouTube report ${reportId}:`, error);
-
-            await YoutubeReportHistory.findByIdAndUpdate(reportId, {
-                status: 'failed',
-                error: error.message
-            });
+            console.error(`Error processing report ${reportId}:`, error);
+            throw error;
         }
     }
 
@@ -2398,11 +2438,11 @@ class revenueUploadController {
                 );
 
                 batch.push({
-                    user_id: userId || 0,
+                    user_id: value.label_id || 0,
                     uploadId,
 
-                    // retailer: 'Art Track (YouTube Music)',
-                    retailer: 'Facebook',
+                    retailer: value.channel_name,
+                    // retailer: 'Facebook',
                     label: value.label_name || null,
 
                     upc_code: null,
@@ -2410,9 +2450,12 @@ class revenueUploadController {
 
                     isrc_code: value.isrc || value.elected_isrc || null,
 
-                    release: value.track_name || null,
-                    track_title: value.track_name || null,
-                    track_artist: value.artist_name || null,
+                    // release: value.track_name || null,
+                    // track_title: value.track_name || null,
+                    // track_artist: value.artist_name || null,
+                    release: value.asset_title || null,
+                    track_title: value.asset_title || null,
+                    track_artist: value.label_name || null,
 
                     remixer_name: null,
                     remix: null,
@@ -2441,6 +2484,8 @@ class revenueUploadController {
 
             // 🧹 Insert remaining
             totalInserted += await this.insertBatch(batch);
+            console.log("totalInserted", totalInserted);
+
 
             return res.status(200).json({
                 success: true,
