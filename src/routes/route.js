@@ -101,6 +101,7 @@ router.post("/uploadBulkPayout", authMiddleware, upload.single("file"), payoutCo
 router.get("/getAllLogs", authMiddleware, logController.getAllLogs);
 
 router.post('/import-revenue-json', revenueController.importRevenueFromJson);
+router.post('/import-youtube-revenue-json', revenueController.importYoutubeRevenueFromJson);
 
 
 

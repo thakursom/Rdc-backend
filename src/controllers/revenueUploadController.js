@@ -7,6 +7,7 @@ const { streamArray } = require('stream-json/streamers/StreamArray');
 const mongoose = require("mongoose");
 const Papa = require('papaparse');
 const fastCsv = require('fast-csv');
+const ExcelJS = require('exceljs');
 
 const LogService = require("../services/logService");
 const User = require("../models/userModel");
@@ -31,6 +32,7 @@ const Release = require("../models/releaseModel");
 const Contract = require("../models/contractModel");
 const AudioStreamingReportHistory = require("../models/audioStreamingReportHistoryModel");
 const YoutubeReportHistory = require("../models/youtubeReportHistoryModel");
+const YouTube = require("../models/youtubeModel");
 
 const monthMap = {
     Jan: '01', Feb: '02', Mar: '03', Apr: '04',
@@ -57,6 +59,8 @@ class revenueUploadController {
         this.processYoutubeReport = this.processYoutubeReport.bind(this);
         this.importRevenueFromJson = this.importRevenueFromJson.bind(this)
         this.insertBatch = this.insertBatch.bind(this)
+        this.importYoutubeRevenueFromJson = this.importYoutubeRevenueFromJson.bind(this)
+        this.insertYoutubeBatch = this.insertYoutubeBatch.bind(this)
     }
 
 
@@ -754,9 +758,9 @@ class revenueUploadController {
                 };
             }
 
-            if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
-            if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
-            if (releases === "true") filter.release = { $nin: ["", null, undefined] };
+            // if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
+            // if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
+            // if (releases === "true") filter.release = { $nin: ["", null, undefined] };
 
             // === Step 1: Daily aggregation for revenue and streams ===
             const dailyPipeline = [
@@ -912,8 +916,9 @@ class revenueUploadController {
 
             const { role, userId } = req.user;
 
-            // === Build filter (same as original) ===
             const filter = {};
+
+            /** ========== USER ROLE FILTER ========== **/
             if (role && role !== "Super Admin" && role !== "Manager") {
                 const users = await User.find({ parent_id: userId }, { id: 1 }).lean();
                 const childIds = users.map(u => u.id);
@@ -922,6 +927,7 @@ class revenueUploadController {
             }
             if (labelId) filter.user_id = Number(labelId);
 
+            /** ========== PLATFORM FILTER ========== **/
             const defaultRetailers = ["Apple Music", "Spotify", "Gaana", "Jio Saavn", "Facebook", "Amazon", "TikTok"];
             if (platform && platform !== "") {
                 filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
@@ -929,6 +935,7 @@ class revenueUploadController {
                 filter.retailer = { $in: defaultRetailers };
             }
 
+            /** ========== DATE FILTER ========== **/
             const selectedYear = year ? parseInt(year) : new Date().getFullYear();
             if (year && !month && !fromDate && !toDate) {
                 filter.date = { $gte: `${selectedYear}-01-01`, $lte: `${selectedYear}-12-31` };
@@ -947,16 +954,12 @@ class revenueUploadController {
                 };
             }
 
-            if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
-            if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
-            if (releases === "true") filter.release = { $nin: ["", null, undefined] };
-
             const pageNum = parseInt(page);
             const limitNum = parseInt(limit);
             const skipNum = (pageNum - 1) * limitNum;
 
-            // === Step 1: Daily aggregation for deduction calculation ===
-            const dailyPipeline = [
+            /** ========== DAILY AGGREGATION ========== **/
+            const dailyData = await TblReport2025.aggregate([
                 { $match: filter },
                 {
                     $addFields: {
@@ -977,11 +980,9 @@ class revenueUploadController {
                         _id: 0
                     }
                 }
-            ];
+            ]).allowDiskUse(true);
 
-            const dailyData = await TblReport2025.aggregate(dailyPipeline).allowDiskUse(true);
-
-            // === Step 2: Fetch contracts ===
+            /** ========== CONTRACT DEDUCTION APPLY ========== **/
             const uniqueUserIds = [...new Set(dailyData.map(d => d.user_id).filter(Boolean))];
             const contracts = uniqueUserIds.length > 0
                 ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
@@ -993,10 +994,8 @@ class revenueUploadController {
                 contractMap.get(c.user_id).push(c);
             });
 
-            // Apply deductions to daily data
             const dailyDeducted = dailyData.map(item => {
                 let deducted = item.dailyRevenue;
-
                 const userContracts = contractMap.get(item.user_id) || [];
                 for (const contract of userContracts) {
                     if (item.date >= contract.startDate && item.date <= contract.endDate) {
@@ -1005,58 +1004,98 @@ class revenueUploadController {
                         break;
                     }
                 }
-
                 return { date: item.date, user_id: item.user_id, deductedRevenue: deducted };
             });
 
-            // === Step 3: Artist Report ===
-            const artistPipeline = [
+            let groupId = { user_id: "$user_id" };
+
+            let sampleFields = {
+                sampleDate: { $first: "$date" },
+                samplePlatform: { $first: "$retailer" },
+                sampleRelease: { $first: "$release" },
+                sampleArtist: { $first: "$track_artist" },
+                sampleISRC: { $first: "$isrc_code" }       // ALWAYS KEEP SAMPLE ISRC
+            };
+
+            if (artist === "true") {
+                groupId.artist = { $ifNull: ["$track_artist", "Unknown Artist"] };
+            }
+            if (releases === "true") {
+                groupId.release = { $ifNull: ["$release", "Unknown Release"] };
+            }
+            if (territory === "true") {
+                groupId.territory = { $ifNull: ["$territory", "Unknown"] };
+            }
+            if (track === "true") {
+                groupId.isrc_code = { $ifNull: ["$isrc_code", "Unknown"] };  // GROUP BY TRACK
+            }
+
+            const pipeline = [
                 { $match: filter },
                 {
                     $addFields: {
-                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } }
+                        revenueNum: {
+                            $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 }
+                        }
                     }
                 },
                 {
                     $group: {
-                        _id: {
-                            artist: { $ifNull: ["$track_artist", "Unknown Artist"] },
-                            user_id: "$user_id"
-                        },
+                        _id: groupId,
                         grossRevenue: { $sum: "$revenueNum" },
-                        sampleDate: { $first: "$date" },
-                        samplePlatform: { $first: "$retailer" },
-                        sampleRelease: { $first: "$release" }
+                        ...sampleFields
                     }
                 }
             ];
 
-            const artistData = await TblReport2025.aggregate(artistPipeline).allowDiskUse(true);
+            const artistData = await TblReport2025.aggregate(pipeline).allowDiskUse(true);
 
-            // Apply deduction proportionally per artist
+            /** ===== APPLY DEDUCTION RATIO ===== */
+            const includeTrack = track === "true";
+            const includeRelease = releases === "true";
+
             const artistReports = artistData.map(item => {
                 const userDaily = dailyDeducted.filter(d => d.user_id === item._id.user_id);
-                const totalGrossForUser = userDaily.reduce((s, d) => s + (dailyData.find(dd => dd.user_id === item._id.user_id && dd.date === d.date)?.dailyRevenue || 0), 0);
+
+                const totalGrossForUser = userDaily.reduce(
+                    (s, d) =>
+                        s +
+                        (dailyData.find(dd => dd.user_id === item._id.user_id && dd.date === d.date)
+                            ?.dailyRevenue || 0),
+                    0
+                );
+
                 const totalDeductedForUser = userDaily.reduce((s, d) => s + d.deductedRevenue, 0);
 
-                const deductionRatio = totalGrossForUser > 0 ? totalDeductedForUser / totalGrossForUser : 1;
+                const deductionRatio =
+                    totalGrossForUser > 0 ? totalDeductedForUser / totalGrossForUser : 1;
 
-                return {
-                    artist: item._id.artist,
+                const baseResponse = {
+                    artist: item._id.artist || item.sampleArtist || "Unknown Artist",
+                    // release: item._id.release || item.sampleRelease || "Unknown Release",
+                    territory: item._id.territory || "Global",
                     revenue: Number((item.grossRevenue * deductionRatio).toFixed(2)),
                     date: item.sampleDate,
                     platform: item.samplePlatform || "Various",
-                    release: item.sampleRelease || "Various",
-                    user_id: item._id.user_id
+                    user_id: item._id.user_id,
                 };
-            })
-                .sort((a, b) => b.revenue - a.revenue);
 
+                // Conditional add ISRC only when group by track
+                if (includeTrack) {
+                    baseResponse.isrc_code = item._id.isrc_code || item.sampleISRC || "Unknown";
+                } else if (includeRelease) {
+                    baseResponse.release = item._id.release || item.sampleRelease || "Unknown";
+                }
+
+                return baseResponse;
+            }).sort((a, b) => b.revenue - a.revenue);
+
+
+            /** PAGINATION **/
             const totalRecords = artistReports.length;
             const paginatedReports = artistReports.slice(skipNum, skipNum + limitNum);
 
-            // === Response ===
-            res.json({
+            return res.json({
                 success: true,
                 data: {
                     reports: paginatedReports,
@@ -1514,14 +1553,6 @@ class revenueUploadController {
                 month,
                 fromDate,
                 toDate,
-                releases,
-                artist,
-                track,
-                partner,
-                contentType,
-                format,
-                territory,
-                quarters
             } = filters;
 
             const userFilter = {};
@@ -1590,9 +1621,6 @@ class revenueUploadController {
                 };
             }
 
-            if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
-            if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
-            if (releases === "true") filter.release = { $nin: ["", null, undefined] };
 
             const pipeline = [
                 { $match: filter },
@@ -1613,10 +1641,10 @@ class revenueUploadController {
                 return;
             }
 
-            // NEW: Create file path early
+            const MAX_ROWS_PER_SHEET = 1000000;
             const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
             const randomSuffix = Math.random().toString(36).substring(2, 8);
-            const filename = `Revenue_Report_${timestamp}_${randomSuffix}.csv`;
+            const filename = `Revenue_Report_${timestamp}_${randomSuffix}.xlsx`;
 
             const relativeFolder = 'reports';
             const absoluteFolder = path.join(__dirname, '../uploads', relativeFolder);
@@ -1629,33 +1657,64 @@ class revenueUploadController {
             const relativePath = `uploads/reports/${filename}`;
             const fileURL = `${process.env.BASE_URL}/${relativePath}`;
 
-            // NEW: Streaming approach – no more huge "data" array!
-            const writeStream = fs.createWriteStream(absoluteFilePath);
+            // Create streaming workbook
+            const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+                filename: absoluteFilePath,
+                useStyles: true,
+                useSharedStrings: true
+            });
 
-            // We'll write headers after getting the first document (dynamic headers)
-            let headersWritten = false;
-            let headers = ["S.No"];
-            let rowIndex = 1;
+            let headers = ['S.No'];
+            let headersDetermined = false;
+            let currentWorksheet = null;
+            let rowCountInCurrentSheet = 0;
+            let totalRowsProcessed = 0;
+            let sheetIndex = 1;
 
             const excludeFields = ["_id", "__v", "createdAt", "updatedAt"];
 
-            // Use aggregation cursor for true streaming (low memory)
+            async function createNewWorksheet() {
+                if (currentWorksheet) {
+                    currentWorksheet.commit();
+                }
+
+                currentWorksheet = workbook.addWorksheet(`Sheet ${sheetIndex}`);
+                sheetIndex++;
+
+                const columnDefs = [
+                    { header: 'S.No', key: 'sno', width: 12 }
+                ];
+
+                headers.slice(1).forEach(h => {
+                    columnDefs.push({
+                        header: h,
+                        key: h.toLowerCase().replace(/\s+/g, '_'),
+                        width: Math.min(Math.max(h.length + 5, 15), 40)
+                    });
+                });
+
+                currentWorksheet.columns = columnDefs;
+
+                const headerRow = currentWorksheet.getRow(1);
+                headerRow.font = { bold: true };
+                headerRow.fill = {
+                    type: 'pattern',
+                    pattern: 'solid',
+                    fgColor: { argb: 'FFE0E0E0' }
+                };
+
+                rowCountInCurrentSheet = 0;
+            }
+
             const collection = mongoose.connection.db.collection('tblreport_2025');
             const cursor = collection.aggregate(pipeline, {
                 allowDiskUse: true,
-                cursor: { batchSize: 1000 } // Adjust batch size if needed
+                cursor: { batchSize: 1000 }
             });
 
-            // Create a fast-csv formatter that writes directly to file
-            const csvStream = fastCsv.format({ headers: false, includeEndRowDelimiter: true });
-
-            csvStream.pipe(writeStream);
-
-            let firstDoc = true;
-
             for await (const doc of cursor) {
-                if (firstDoc) {
-                    // Build headers from first document (same as your original code)
+                // Determine headers from the very first document
+                if (!headersDetermined) {
                     Object.keys(doc).forEach(key => {
                         if (!excludeFields.includes(key) && key !== "date") {
                             headers.push(key);
@@ -1663,51 +1722,63 @@ class revenueUploadController {
                     });
                     headers.push("date");
 
-                    // Write header row
-                    csvStream.write(headers);
-                    headersWritten = true;
-                    firstDoc = false;
+                    // Now create the first worksheet with proper headers
+                    await createNewWorksheet();
+                    headersDetermined = true;
                 }
 
-                // Build row data
-                const rowData = [rowIndex++];
+                // If current sheet is full, create a new one
+                if (rowCountInCurrentSheet >= MAX_ROWS_PER_SHEET) {
+                    await createNewWorksheet();
+                }
+
+                // Build row data object
+                const rowData = {
+                    sno: totalRowsProcessed + 1
+                };
 
                 Object.keys(doc).forEach(key => {
                     if (!excludeFields.includes(key) && key !== "date") {
-                        rowData.push(doc[key] ?? "");
+                        const normKey = key.toLowerCase().replace(/\s+/g, '_');
+                        rowData[normKey] = doc[key] ?? "";
                     }
                 });
-                rowData.push(doc.date ?? "");
+                rowData.date = doc.date ?? "";
 
-                csvStream.write(rowData);
+                // Add row and commit it immediately (critical for streaming stability)
+                const row = currentWorksheet.addRow(rowData);
+                row.commit();
 
-                // Optional: log progress
-                if (rowIndex % 10000 === 0) {
-                    console.log(`Streamed ${rowIndex} rows...`);
+                rowCountInCurrentSheet++;
+                totalRowsProcessed++;
+
+                if (totalRowsProcessed % 10000 === 0) {
+                    console.log(`Processed ${totalRowsProcessed} rows... (Current sheet: Report Part ${sheetIndex - 1})`);
                 }
             }
 
-            // End the streams
-            csvStream.end();
+            // Commit the final worksheet
+            if (currentWorksheet) {
+                currentWorksheet.commit();
+            }
+
+            // Finalize the workbook
+            await workbook.commit();
+
             cursor.close();
 
-            // Wait for file to finish writing
-            await new Promise((resolve, reject) => {
-                writeStream.on('finish', resolve);
-                writeStream.on('error', reject);
-            });
+            console.log(`Excel report generated: ${absoluteFilePath}`);
+            console.log(`Total rows: ${totalRowsProcessed} across ${sheetIndex - 1} sheet(s)`);
 
-            console.log(`CSV report saved: ${absoluteFilePath} (${rowIndex - 1} rows)`);
-
-            // Update history
+            // Update history (single file)
             await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
                 status: 'ready',
                 filename,
                 filePath: relativePath,
-                fileURL,
+                fileURL
             });
 
-            console.log(`Report ${reportId} successfully generated as CSV`);
+            console.log(`Report ${reportId} successfully generated as Excel (.xlsx)`);
 
         } catch (error) {
             console.error(`Error processing report ${reportId}:`, error);
@@ -2407,8 +2478,8 @@ class revenueUploadController {
                     user_id: value.label_id || 0,
                     uploadId,
 
-                    retailer: value.channel_name,
-                    // retailer: 'Facebook',
+                    // retailer: value.channel_name,
+                    retailer: 'Facebook',
                     label: value.label_name || null,
 
                     upc_code: null,
@@ -2416,12 +2487,12 @@ class revenueUploadController {
 
                     isrc_code: value.isrc || value.elected_isrc || null,
 
-                    // release: value.track_name || null,
-                    // track_title: value.track_name || null,
-                    // track_artist: value.artist_name || null,
-                    release: value.asset_title || null,
-                    track_title: value.asset_title || null,
-                    track_artist: value.label_name || null,
+                    release: value.track_name || null,
+                    track_title: value.track_name || null,
+                    track_artist: value.artist_name || null,
+                    // release: value.asset_title || null,
+                    // track_title: value.asset_title || null,
+                    // track_artist: value.label_name || null,
 
                     remixer_name: null,
                     remix: null,
@@ -2467,6 +2538,136 @@ class revenueUploadController {
             });
         }
     }
+
+    async insertYoutubeBatch(batch) {
+        if (!batch || batch.length === 0) return 0;
+
+        try {
+            const result = await YouTube.insertMany(batch, {
+                ordered: false,
+                bypassDocumentValidation: true
+            });
+
+            const inserted = result.length;
+            batch.length = 0; // 🔥 FREE MEMORY
+            return inserted;
+
+        } catch (error) {
+            // Partial success handling
+            if (error.insertedDocs) {
+                const inserted = error.insertedDocs.length;
+                batch.length = 0;
+                return inserted;
+            }
+
+            console.error('Batch insert error:', error);
+            batch.length = 0;
+            return 0;
+        }
+    }
+
+
+    async importYoutubeRevenueFromJson(req, res) {
+        try {
+            const { filePath, uploadId, userId } = req.body;
+
+            if (!filePath || !uploadId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "filePath and uploadId are required"
+                });
+            }
+
+            const absolutePath = path.resolve(filePath);
+            console.log("absolutePath:", absolutePath);
+
+            if (!fs.existsSync(absolutePath)) {
+                return res.status(404).json({
+                    success: false,
+                    message: "JSON file not found"
+                });
+            }
+
+            // Streaming instead of readFileSync
+            const pipeline = chain([
+                fs.createReadStream(absolutePath, { highWaterMark: 1024 * 1024 }),
+                parser(),
+                streamArray()
+            ]);
+
+            let batch = [];
+            let totalInserted = 0;
+
+            for await (const { value } of pipeline) {
+                const formattedDate = getDateFromMonthYear(value.month, value.year);
+
+                batch.push({
+                    user_id: value.label_id || null,
+                    uploadId,
+                    type: value.type || null,
+                    asset_id: value.asset_id || null,
+                    country: value.country === "N/A" ? null : value.country,
+                    isrc_code: value.isrc || value.elected_isrc || null,
+                    upc_code: value.upc || null,
+                    sub_label_id: value.sub_label_id || null,
+                    sub_label_share: value.sub_label_share || null,
+                    partner_share: value.partner_share || null,
+                    content_type: value.content_type || null,
+                    claim_type: value.claim_type || null,
+                    asset_title: value.asset_title || null,
+                    video_duration_sec: value.video_duration_sec || null,
+                    category: value.category || null,
+                    custom_id: value.custom_id || null,
+                    asset_channel_id: value.asset_channel_id || null,
+                    channel_name: value.channel_name || null,
+                    label_name: value.label_name || null,
+                    total_play: value.total_play ? Number(value.total_play) : null,
+                    partner_revenue: value.partner_revenue || null,
+                    inr_rate: value.inr_rate || null,
+                    total_revenue: value.total_revenue || null,
+                    label_shared: value.label_shared || null,
+                    track_id: value.track_id || null,
+                    album_id: value.album_id || null,
+                    channel_type: value.channel_type || 1,
+                    usd: value.usd || null,
+                    usd_label_share: value.usd_label_share || null,
+                    usd_rdc_share: value.usd_rdc_share || null,
+                    label_share: value.label_share || null,
+                    rdc_share: value.rdc_share || null,
+                    fileid: value.fileid || null,
+                    status: 0,
+                    inv_generated: false,
+                    label_code: value.label_code || null,
+                    video_link: value.video_link || null,
+                    channel_link: value.channel_link || null,
+                    sub_label: value.sub_label || null,
+                    date: formattedDate,
+                    uploading_date: new Date().toISOString().split("T")[0]
+                });
+
+                if (batch.length === BATCH_SIZE) {
+                    totalInserted += await this.insertYoutubeBatch(batch);
+                }
+            }
+
+            // Insert Remaining
+            totalInserted += await this.insertYoutubeBatch(batch);
+
+            return res.status(200).json({
+                success: true,
+                message: "YouTube revenue imported successfully",
+                totalInserted
+            });
+
+        } catch (error) {
+            console.error("Import JSON Error:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error"
+            });
+        }
+    }
+
 
 
 }
