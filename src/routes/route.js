@@ -12,6 +12,7 @@ const conversionController = require("../controllers/conversionController");
 const revenueController = require("../controllers/revenueUploadController");
 const payoutController = require("../controllers/payoutController");
 const logController = require("../controllers/logController");
+const releaseController = require("../controllers/releaseController");
 
 
 
@@ -99,6 +100,9 @@ router.post("/uploadBulkPayout", authMiddleware, upload.single("file"), payoutCo
 
 //Log Apis
 router.get("/getAllLogs", authMiddleware, logController.getAllLogs);
+
+//Release Apis
+router.get("/releases", authMiddleware, releaseController.getAllReleases);
 
 router.post('/import-revenue-json', revenueController.importRevenueFromJson);
 router.post('/import-youtube-revenue-json', revenueController.importYoutubeRevenueFromJson);
