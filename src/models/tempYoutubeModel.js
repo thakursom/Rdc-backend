@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const YouTubeArtTrackRevenueSchema = new mongoose.Schema({
+const TempYoutubeReportSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -192,4 +192,4 @@ const YouTubeArtTrackRevenueSchema = new mongoose.Schema({
     versionKey: false
 });
 
-module.exports = mongoose.model("YouTubeArtTrackRevenue", YouTubeArtTrackRevenueSchema);
+module.exports = mongoose.model("TempYoutube", TempYoutubeReportSchema);

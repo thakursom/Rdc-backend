@@ -11,6 +11,14 @@ const YoutubeReportSchema = new mongoose.Schema({
         ref: "RevenueUpload",
         required: true
     },
+    retailer: {
+        type: String,
+        default: null
+    },
+    track_artist: {
+        type: String,
+        default: null
+    },
     type: {
         type: String,
         default: null
