@@ -59,6 +59,14 @@ const UserSchema = new mongoose.Schema({
         type: Number,
         default: 1010
     },
+    total_stream: {
+        type: Number,
+        default: null
+    },
+    total_revenue: {
+        type: Number,
+        default: null
+    },
     resetToken: {
         type: String,
         default: null

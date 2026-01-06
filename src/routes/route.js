@@ -91,6 +91,7 @@ router.get('/youtube-report-history', authMiddleware, revenueController.getYoutu
 router.delete('/delete-youtube-report', authMiddleware, revenueController.deleteYoutubeReportHistory);
 router.get('/trigger-audio-streaming-excel', authMiddleware, revenueController.triggerAudioStreamingExcelReport);
 router.get('/trigger-youtube-excel', authMiddleware, revenueController.triggerYoutubeExcelReport);
+router.get('/revenue-summary', authMiddleware, revenueController.getUserRevenueSummary);
 
 
 //Payout Apis

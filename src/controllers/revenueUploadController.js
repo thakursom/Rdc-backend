@@ -1,39 +1,25 @@
+const mongoose = require("mongoose");
 const fs = require('fs');
 const path = require('path');
 const XLSX = require("xlsx");
 const { chain } = require('stream-chain');
 const { parser } = require('stream-json');
 const { streamArray } = require('stream-json/streamers/StreamArray');
-const mongoose = require("mongoose");
-const Papa = require('papaparse');
-const fastCsv = require('fast-csv');
 const ExcelJS = require('exceljs');
 
+const { excelSerialToISODate } = require("../utils/dateUtils");
 const LogService = require("../services/logService");
 const User = require("../models/userModel");
-const RevenueUpload = require("../models/RevenueUploadModel");
-const AppleRevenue = require("../models/AppleRevenueModel");
-const SpotifyRevenue = require("../models/SpotifyRevenueModel");
-const GaanaRevenue = require("../models/GaanaRevenueModel");
-const JioSaavanRevenue = require("../models/JioSaavanRevenueModel");
-const FacebookRevenue = require("../models/FacebookRevenueModel");
-const AmazonRevenue = require("../models/AmazonRevenueModel");
-const TikTokRevenue = require("../models/TikTokRevenueModel");
-const TempReport = require("../models/tempReportModel");
-const TblReport2025 = require("../models/tblReport2025Model");
-const SoundRecordingRevenue = require("../models/soundRecordingRevenueModel");
-const YouTubeArtTrackRevenue = require("../models/youTubeArtTrackRevenueModel");
-const YouTubePartnerChannelRevenue = require("../models/youTubePartnerChannelRevenueModel");
-const YouTubeRDCChannelRevenue = require("../models/youTubeRDCChannelRevenueModel");
-const YouTubeVideoClaimRevenue = require("../models/youTubeVideoClaimRevenueModel");
-const YTPremiumRevenue = require("../models/ytPremiumRevenueModel");
-const { excelSerialToISODate } = require("../utils/dateUtils");
 const Release = require("../models/releaseModel");
 const Contract = require("../models/contractModel");
+const RevenueUpload = require("../models/RevenueUploadModel");
+const TempReport = require("../models/tempReportModel");
+const TblReport2025 = require("../models/tblReport2025Model");
 const AudioStreamingReportHistory = require("../models/audioStreamingReportHistoryModel");
 const YoutubeReportHistory = require("../models/youtubeReportHistoryModel");
 const YouTube = require("../models/youtubeModel");
 const TempYoutube = require("../models/tempYoutubeModel");
+const RevenueSummary = require("../models/revenueSummaryModel");
 
 const monthMap = {
     Jan: '01', Feb: '02', Mar: '03', Apr: '04',
@@ -45,6 +31,18 @@ const getDateFromMonthYear = (month, year) => {
     if (!month || !year) return null;
     const m = monthMap[month];
     return m ? `${year}-${m}-01` : null;
+};
+
+const getLast12Months = () => {
+    const months = [];
+    const now = new Date();
+
+    for (let i = 11; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        months.push(key);
+    }
+    return months;
 };
 
 const BATCH_SIZE = 1000;
@@ -62,6 +60,8 @@ class revenueUploadController {
         this.insertBatch = this.insertBatch.bind(this)
         this.importYoutubeRevenueFromJson = this.importYoutubeRevenueFromJson.bind(this)
         this.insertYoutubeBatch = this.insertYoutubeBatch.bind(this)
+        this.uploadTblRevenue = this.uploadTblRevenue.bind(this)
+        this.calculateRevenueSummary = this.calculateRevenueSummary.bind(this)
     }
 
 
@@ -175,7 +175,7 @@ class revenueUploadController {
                 } else if (platform === "JioSaavan") {
                     isrcCode = r.ISRC;
                     obj = {
-                        retailer: "jio_savan",
+                        retailer: "Jio Saavn",
                         label: r["Label Name"] || null,
                         upc_code: r.UPC || null,
                         catalogue_number: null,
@@ -469,26 +469,6 @@ class revenueUploadController {
                 mappedRows.push(finalRow);
             });
 
-            const modelMap = {
-                Spotify: SpotifyRevenue,
-                AppleItunes: AppleRevenue,
-                Gaana: GaanaRevenue,
-                JioSaavan: JioSaavanRevenue,
-                Facebook: FacebookRevenue,
-                Amazon: AmazonRevenue,
-                TikTok: TikTokRevenue,
-                SoundRecording: SoundRecordingRevenue,
-                YouTubeArtTrack: YouTubeArtTrackRevenue,
-                YouTubePartnerChannel: YouTubePartnerChannelRevenue,
-                YouTubeRDCChannel: YouTubeRDCChannelRevenue,
-                YouTubeVideoClaim: YouTubeVideoClaimRevenue,
-                YTPremiumRevenue: YTPremiumRevenue
-            };
-
-            if (modelMap[platform]) {
-                await modelMap[platform].insertMany(mappedRows);
-            }
-
             const youtubePlatforms = [
                 "SoundRecording",
                 "YouTubeArtTrack",
@@ -503,7 +483,6 @@ class revenueUploadController {
             } else {
                 await TempReport.insertMany(mappedRows);
             }
-
 
             await LogService.createLog({
                 user_id: userId,
@@ -536,19 +515,41 @@ class revenueUploadController {
 
             const query = {};
 
-            // Optional filter by platform
             if (platform) {
                 query.platform = platform;
             }
 
             const skip = (page - 1) * limit;
 
-            const [data, total] = await Promise.all([
-                RevenueUpload.find(query)
-                    .sort({ createdAt: -1 })
-                    .skip(skip)
-                    .limit(limit),
+            const aggregationPipeline = [
+                { $match: query },
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: 'user_id',
+                        foreignField: 'id',
+                        as: 'userDetails'
+                    }
+                },
+                {
+                    $addFields: {
+                        username: {
+                            $arrayElemAt: ['$userDetails.name', 0]
+                        }
+                    }
+                },
+                {
+                    $project: {
+                        userDetails: 0
+                    }
+                },
+                { $sort: { createdAt: -1 } },
+                { $skip: skip },
+                { $limit: limit }
+            ];
 
+            const [data, total] = await Promise.all([
+                RevenueUpload.aggregate(aggregationPipeline),
                 RevenueUpload.countDocuments(query)
             ]);
 
@@ -747,6 +748,7 @@ class revenueUploadController {
 
             // Insert into FinalModel
             await FinalModel.insertMany(finalData);
+            await this.calculateRevenueSummary(userId);
 
             // Clear TempModel
             await TempModel.deleteMany({ uploadId });
@@ -1902,6 +1904,28 @@ class revenueUploadController {
                 cursor: { batchSize: 1000 }
             });
 
+            function addOverflowMessageRow(worksheet, headers, nextSheetNumber) {
+                const messageRow = {
+                    sno: ""
+                };
+
+                // Put message in first data column
+                const firstDataKey = headers[1]
+                    .toLowerCase()
+                    .replace(/\s+/g, "_");
+
+                messageRow[firstDataKey] =
+                    `⚠ Data continues in Sheet ${nextSheetNumber}. Please check the next sheet.`;
+
+                const row = worksheet.addRow(messageRow);
+
+                row.font = { bold: true, italic: true };
+                row.alignment = { vertical: "middle", horizontal: "left" };
+
+                row.commit();
+            }
+
+
             for await (const doc of cursor) {
                 // Determine headers from the very first document
                 if (!headersDetermined) {
@@ -1919,8 +1943,18 @@ class revenueUploadController {
 
                 // If current sheet is full, create a new one
                 if (rowCountInCurrentSheet >= MAX_ROWS_PER_SHEET) {
+
+                    // Add message before closing current sheet
+                    addOverflowMessageRow(
+                        currentWorksheet,
+                        headers,
+                        sheetIndex   // next sheet number
+                    );
+
+                    // Commit and create next sheet
                     await createNewWorksheet();
                 }
+
 
                 // Build row data object
                 const rowData = {
@@ -2888,6 +2922,207 @@ class revenueUploadController {
         }
     }
 
+    async calculateRevenueSummary(userId) {
+        try {
+
+            const now = new Date();
+            const startDate = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+            const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+            const dateFilter = {
+                $gte: startDate.toISOString().split("T")[0],
+                $lte: endDate.toISOString().split("T")[0]
+            };
+
+            const dailyPipeline = [
+                {
+                    $addFields: {
+                        revenueNum: { $toDouble: { $ifNull: ["$net_total", 0] } },
+                        streamsNum: { $toLong: { $ifNull: ["$track_count", 0] } }
+                    }
+                },
+                {
+                    $group: {
+                        _id: { user_id: "$user_id", date: "$date" },
+                        revenue: { $sum: "$revenueNum" },
+                        streams: { $sum: "$streamsNum" }
+                    }
+                }
+            ];
+
+            const dailyData = await TblReport2025.aggregate(dailyPipeline).allowDiskUse(true);
+
+            const uniqueUserIds = [...new Set(dailyData.map(d => d._id.user_id))];
+
+            const contracts = uniqueUserIds.length
+                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+                : [];
+
+            const contractMap = new Map();
+            contracts.forEach(c => {
+                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                contractMap.get(c.user_id).push(c);
+            });
+
+            let totalRevenue = 0;
+            let totalStreams = 0;
+
+            dailyData.forEach(item => {
+                let revenue = item.revenue;
+
+                const userContracts = contractMap.get(item._id.user_id) || [];
+                for (const c of userContracts) {
+                    if (item._id.date >= c.startDate && item._id.date <= c.endDate) {
+                        revenue *= (100 - (c.labelPercentage || 0)) / 100;
+                        break;
+                    }
+                }
+
+                totalRevenue += revenue;
+                totalStreams += item.streams;
+            });
+
+            const chartPipeline = [
+                { $match: { date: dateFilter } },
+                {
+                    $addFields: {
+                        revenueNum: { $toDouble: { $ifNull: ["$net_total", 0] } }
+                    }
+                },
+                {
+                    $facet: {
+                        byMonth: [
+                            {
+                                $group: {
+                                    _id: {
+                                        $dateToString: {
+                                            format: "%Y-%m",
+                                            date: { $dateFromString: { dateString: "$date" } }
+                                        }
+                                    },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { _id: 1 } }
+                        ],
+                        byChannel: [
+                            {
+                                $group: {
+                                    _id: { $ifNull: ["$retailer", "Unknown"] },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            }
+                        ],
+                        byCountry: [
+                            {
+                                $group: {
+                                    _id: { $ifNull: ["$territory", "Unknown"] },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            { $limit: 10 }
+                        ]
+                    }
+                }
+            ];
+
+            const [chartData] = await TblReport2025.aggregate(chartPipeline).allowDiskUse(true);
+
+            const last12Months = getLast12Months();
+            const grossTotal = chartData.byMonth.reduce((s, m) => s + m.revenue, 0);
+            const ratio = grossTotal > 0 ? totalRevenue / grossTotal : 1;
+
+            const monthMap = Object.fromEntries(chartData.byMonth.map(m => [m._id, m.revenue]));
+
+            const netRevenueByMonth = {};
+            last12Months.forEach(m => {
+                netRevenueByMonth[m] = Number(((monthMap[m] || 0) * ratio).toFixed(2));
+            });
+
+            const revenueByChannel = Object.fromEntries(
+                chartData.byChannel.map(c => [c._id || "Unknown", Number((c.revenue * ratio).toFixed(2))])
+            );
+
+            const revenueByCountry = Object.fromEntries(
+                chartData.byCountry.map(c => [c._id || "Unknown", Number((c.revenue * ratio).toFixed(2))])
+            );
+
+            await RevenueSummary.updateOne(
+                { user_id: userId },
+                {
+                    $set: {
+                        netRevenueByMonth,
+                        revenueByChannel,
+                        revenueByCountry
+                    },
+                    $setOnInsert: { user_id: userId }
+                },
+                { upsert: true }
+            );
+
+            await User.updateOne(
+                { id: userId },
+                {
+                    $set: {
+                        total_stream: totalStreams,
+                        total_revenue: Number(totalRevenue.toFixed(2))
+                    }
+                }
+            );
+        } catch (error) {
+            console.log(error);
+
+        }
+    }
+
+    async getUserRevenueSummary(req, res, next) {
+        try {
+            const { userId } = req.user;
+
+            const data = await User.aggregate([
+                {
+                    $match: { id: userId }   // or _id if you use ObjectId
+                },
+                {
+                    $lookup: {
+                        from: "revenuesummaries",   // collection name
+                        localField: "id",           // User.id
+                        foreignField: "user_id",    // RevenueSummary.user_id
+                        as: "revenueSummary"
+                    }
+                },
+                {
+                    $unwind: {
+                        path: "$revenueSummary",
+                        preserveNullAndEmptyArrays: true
+                    }
+                },
+                {
+                    $project: {
+                        _id: 0,
+                        id: 1,
+                        name: 1,
+                        email: 1,
+                        total_stream: 1,
+                        total_revenue: 1,
+                        netRevenueByMonth: "$revenueSummary.netRevenueByMonth",
+                        revenueByChannel: "$revenueSummary.revenueByChannel",
+                        revenueByCountry: "$revenueSummary.revenueByCountry",
+                        updatedAt: "$revenueSummary.updatedAt"
+                    }
+                }
+            ]);
+
+            return res.json({
+                success: true,
+                data: data[0] || null
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
 
 
 }

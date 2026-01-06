@@ -187,7 +187,6 @@ class payoutController {
                 });
             }
 
-            // Read Excel
             const workbook = XLSX.readFile(req.file.path);
             const sheet = workbook.Sheets[workbook.SheetNames[0]];
             const rows = XLSX.utils.sheet_to_json(sheet);
@@ -199,17 +198,53 @@ class payoutController {
                 });
             }
 
-            const payouts = [];
+            /* ----------------------------------
+               1️⃣ Collect unique user names
+            ---------------------------------- */
+            const userNames = [
+                ...new Set(
+                    rows
+                        .map(r => r["User Name"]?.trim())
+                        .filter(Boolean)
+                )
+            ];
 
+            /* ----------------------------------
+               2️⃣ Fetch users in ONE query
+            ---------------------------------- */
+            const users = await User.find(
+                { name: { $in: userNames } },
+                { id: 1, name: 1 }
+            ).lean();
+
+            /* ----------------------------------
+               3️⃣ Create map: name → id
+            ---------------------------------- */
+            const userNameToIdMap = {};
+            users.forEach(u => {
+                userNameToIdMap[u.name] = u.id;
+            });
+
+            const payouts = [];
+            const skippedUsers = [];
+
+            /* ----------------------------------
+               4️⃣ Build payouts
+            ---------------------------------- */
             for (const row of rows) {
-                // Required fields validation
-                if (!row["User ID"] || !row["Payment Method"] || !row["Amount"]) {
-                    continue; // skip invalid rows
+                const userName = row["User Name"]?.trim();
+                const paymentMethod = row["Payment Method"]?.toLowerCase();
+
+                if (!userName || !paymentMethod || !row["Amount"]) continue;
+
+                const user_id = userNameToIdMap[userName];
+
+                // Skip if user not found
+                if (!user_id) {
+                    skippedUsers.push(userName);
+                    continue;
                 }
 
-                const paymentMethod = row["Payment Method"].toLowerCase();
-
-                // Build paymentDetails based on method
                 let paymentDetails = {};
 
                 if (paymentMethod === "bank") {
@@ -236,7 +271,7 @@ class payoutController {
                 }
 
                 payouts.push({
-                    user_id: Number(row["User ID"]),
+                    user_id,
                     paymentMethod,
                     amount: Number(row["Amount"]),
                     totalAmount: null,
@@ -248,14 +283,19 @@ class payoutController {
             if (!payouts.length) {
                 return res.status(400).json({
                     success: false,
-                    message: "No valid payout records found"
+                    message: "No valid payout records found",
+                    skippedUsers
                 });
             }
 
-            // Bulk insert
+            /* ----------------------------------
+               5️⃣ Bulk insert
+            ---------------------------------- */
             const insertedPayouts = await PaymentHistory.insertMany(payouts);
 
-            // Log
+            /* ----------------------------------
+               6️⃣ Log
+            ---------------------------------- */
             await LogService.createLog({
                 user_id: userId,
                 email,
@@ -268,7 +308,8 @@ class payoutController {
             return res.status(200).json({
                 success: true,
                 message: "Bulk payout uploaded successfully",
-                inserted: insertedPayouts.length
+                inserted: insertedPayouts.length,
+                skippedUsers // helpful for UI
             });
 
         } catch (error) {
@@ -276,6 +317,7 @@ class payoutController {
             next(error);
         }
     }
+
 
 }
 
