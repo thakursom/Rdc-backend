@@ -56,12 +56,13 @@ class revenueUploadController {
         this.processAudioStreamingReport = this.processAudioStreamingReport.bind(this);
         this.processPendingYoutubeReports = this.processPendingYoutubeReports.bind(this);
         this.processYoutubeReport = this.processYoutubeReport.bind(this);
-        this.importRevenueFromJson = this.importRevenueFromJson.bind(this)
-        this.insertBatch = this.insertBatch.bind(this)
-        this.importYoutubeRevenueFromJson = this.importYoutubeRevenueFromJson.bind(this)
-        this.insertYoutubeBatch = this.insertYoutubeBatch.bind(this)
-        this.uploadTblRevenue = this.uploadTblRevenue.bind(this)
-        this.calculateRevenueSummary = this.calculateRevenueSummary.bind(this)
+        this.importRevenueFromJson = this.importRevenueFromJson.bind(this);
+        this.insertBatch = this.insertBatch.bind(this);
+        this.importYoutubeRevenueFromJson = this.importYoutubeRevenueFromJson.bind(this);
+        this.insertYoutubeBatch = this.insertYoutubeBatch.bind(this);
+        this.uploadTblRevenue = this.uploadTblRevenue.bind(this);
+        this.calculateRevenueSummary = this.calculateRevenueSummary.bind(this);
+        this.calculateRevenueForSuperAdminandManager = this.calculateRevenueForSuperAdminandManager.bind(this);
     }
 
 
@@ -87,18 +88,18 @@ class revenueUploadController {
                 return res.status(400).json({ error: "Excel file is empty" });
             }
 
-            // Process all rows and collect ISRC codes for batch lookup
-            const rowsWithIsrc = [];
-            const isrcCodes = new Set();
+            const labelIdentifiers = new Set();
+            const rowsWithData = [];
 
-            // First pass: extract ISRC codes and prepare row data
             jsonData.forEach(r => {
                 let isrcCode = null;
+                let labelCodeFromFile = null;
                 let obj = {};
 
                 // FACEBOOK MAPPING
                 if (platform === "Facebook") {
                     isrcCode = r.elected_isrc;
+                    labelCodeFromFile = r["Label ID"];
                     obj = {
                         retailer: r.service || null,
                         label: r["Label Name"] || null,
@@ -124,6 +125,7 @@ class revenueUploadController {
                     // SPOTIFY MAPPING
                 } else if (platform === "Spotify") {
                     isrcCode = r.ISRC;
+                    labelCodeFromFile = r["Label Code"];
                     obj = {
                         retailer: "Spotify",
                         label: r["Label Name"] || null,
@@ -149,6 +151,7 @@ class revenueUploadController {
                     // Amazon MAPPING
                 } else if (platform === "Amazon") {
                     isrcCode = r.ISRC;
+                    labelCodeFromFile = r["Label ID"];
                     obj = {
                         retailer: "Amazon",
                         label: r["Label Name"] || null,
@@ -174,6 +177,7 @@ class revenueUploadController {
                     //JioSaavan MAPPING
                 } else if (platform === "JioSaavan") {
                     isrcCode = r.ISRC;
+                    labelCodeFromFile = r["Label ID"];
                     obj = {
                         retailer: "Jio Saavn",
                         label: r["Label Name"] || null,
@@ -199,6 +203,7 @@ class revenueUploadController {
                     //AppleItunes MAPPING
                 } else if (platform === "AppleItunes") {
                     isrcCode = r.ISRC;
+                    labelCodeFromFile = r["Label Code"];
                     obj = {
                         retailer: "Apple Music",
                         label: r["Label Name"] || null,
@@ -224,6 +229,7 @@ class revenueUploadController {
                     //TikTok MAPPING
                 } else if (platform === "TikTok") {
                     isrcCode = r.Isrc;
+                    labelCodeFromFile = r["Label ID"];
                     obj = {
                         retailer: r.Platforn_Name,
                         label: r["Label Name"] || null,
@@ -249,6 +255,7 @@ class revenueUploadController {
                     //Gaana MAPPING
                 } else if (platform === "Gaana") {
                     isrcCode = r.ISRC;
+                    labelCodeFromFile = r["Label Code"];
                     obj = {
                         retailer: "Gaana",
                         label: r["Label Name"] || null,
@@ -272,6 +279,7 @@ class revenueUploadController {
                     };
                 } else if (platform === "SoundRecording") {
                     isrcCode = r.ISRC;
+                    labelCodeFromFile = r["Label Code"];
                     obj = {
                         retailer: platform || null,
                         track_artist: r.Artist || null,
@@ -299,6 +307,7 @@ class revenueUploadController {
                     };
                 } else if (platform === "YouTubeArtTrack") {
                     isrcCode = r.ISRC;
+                    labelCodeFromFile = r["Label Code"];
                     obj = {
                         retailer: platform || null,
                         track_artist: r.Artist || null,
@@ -330,6 +339,7 @@ class revenueUploadController {
                     };
                 } else if (platform === "YouTubePartnerChannel" || platform === "YouTubeRDCChannel") {
                     isrcCode = r.ISRC;
+                    labelCodeFromFile = r["Label Code"];
                     obj = {
                         retailer: platform || null,
                         track_artist: r.Artist || null,
@@ -358,6 +368,7 @@ class revenueUploadController {
                     };
                 } else if (platform === "YouTubeVideoClaim") {
                     isrcCode = r.ISRC;
+                    labelCodeFromFile = r["Label Code"];
                     obj = {
                         retailer: platform || null,
                         track_artist: r.Artist || null,
@@ -387,6 +398,7 @@ class revenueUploadController {
                     };
                 } else if (platform === "YTPremiumRevenue") {
                     isrcCode = r.ISRC;
+                    labelCodeFromFile = r["Label Code"];
                     obj = {
                         retailer: platform || null,
                         type: r["Type"] || null,
@@ -415,26 +427,24 @@ class revenueUploadController {
                     };
                 }
 
-                if (isrcCode) {
-                    isrcCodes.add(isrcCode);
+                if (labelCodeFromFile) {
+                    labelIdentifiers.add(String(labelCodeFromFile).trim());
                 }
 
-                rowsWithIsrc.push({
+                rowsWithData.push({
                     data: obj,
-                    isrc: isrcCode
+                    labelCodeFromFile: labelCodeFromFile || null,
                 });
             });
 
-            // Batch lookup for ISRC codes in Release model
-            const isrcToLabelMap = {};
-            if (isrcCodes.size > 0) {
-                const releases = await Release.find({
-                    isrc: { $in: Array.from(isrcCodes) },
-                    deleted: 0
-                }).select('isrc label_id');
+            const labelToUserIdMap = {};
+            if (labelIdentifiers.size > 0) {
+                const users = await User.find({
+                    third_party_username: { $in: Array.from(labelIdentifiers) }
+                }).select('id third_party_username').lean();
 
-                releases.forEach(release => {
-                    isrcToLabelMap[release.isrc] = release.label_id;
+                users.forEach(user => {
+                    labelToUserIdMap[user.third_party_username] = user.id;
                 });
             }
 
@@ -450,18 +460,18 @@ class revenueUploadController {
 
             // Prepare final mapped rows with label_id
             const mappedRows = [];
+            const today = new Date().toISOString().split("T")[0];
 
-            rowsWithIsrc.forEach(row => {
-                let labelId = 0;
+            rowsWithData.forEach(row => {
+                let assignedUserId = 0;
 
-                if (row.isrc && isrcToLabelMap[row.isrc]) {
-                    labelId = isrcToLabelMap[row.isrc];
+                if (row.labelCodeFromFile && labelToUserIdMap[String(row.labelCodeFromFile).trim()]) {
+                    assignedUserId = labelToUserIdMap[String(row.labelCodeFromFile).trim()];
                 }
 
-                const today = new Date().toISOString().split("T")[0];
                 const finalRow = {
                     ...row.data,
-                    user_id: labelId,
+                    user_id: assignedUserId,
                     uploading_date: today,
                     uploadId: RevenueUploads._id
                 };
@@ -748,7 +758,15 @@ class revenueUploadController {
 
             // Insert into FinalModel
             await FinalModel.insertMany(finalData);
-            await this.calculateRevenueSummary(userId);
+            // await this.calculateRevenueSummary(userId);
+            const affectedUserIds = [...new Set(finalData.map(row => row.user_id).filter(id => id !== null && id !== undefined && id !== 0))];
+            console.log("affectedUserIds", affectedUserIds);
+
+            for (const id of affectedUserIds) {
+                await this.calculateRevenueSummary(id);  // Pass each affected user_id
+            }
+
+            await this.calculateRevenueForSuperAdminandManager();
 
             // Clear TempModel
             await TempModel.deleteMany({ uploadId });
@@ -785,8 +803,7 @@ class revenueUploadController {
     async getAudioStreamingRevenueSummary(req, res, next) {
         try {
             const {
-                labelId, platform, year, month, fromDate, toDate,
-                releases, artist, track, territory
+                labelId, platform, year, month, fromDate, toDate
             } = req.query;
 
             const { role, userId } = req.user;
@@ -2922,8 +2939,19 @@ class revenueUploadController {
         }
     }
 
+    //calculateRevenueSummary method
     async calculateRevenueSummary(userId) {
         try {
+            // Fetch the user's role to decide if we calculate global or per-user
+            const user = await User.findOne({ id: userId }).select('role').lean();
+            console.log("user", user);
+
+            if (!user) {
+                console.error(`User not found for id: ${userId}`);
+                return;
+            }
+
+            const isAdmin = ['Super Admin', 'Manager'].includes(user.role);
 
             const now = new Date();
             const startDate = new Date(now.getFullYear(), now.getMonth() - 11, 1);
@@ -2934,11 +2962,68 @@ class revenueUploadController {
                 $lte: endDate.toISOString().split("T")[0]
             };
 
+            // Build match stage — remove user_id filter if admin
+            const matchStage = isAdmin
+                ? { date: dateFilter }
+                : { user_id: userId, date: dateFilter };
+
             const dailyPipeline = [
+                { $match: isAdmin ? {} : { user_id: userId } },
                 {
                     $addFields: {
-                        revenueNum: { $toDouble: { $ifNull: ["$net_total", 0] } },
-                        streamsNum: { $toLong: { $ifNull: ["$track_count", 0] } }
+                        // Fix: Extract only numbers and decimal point, limit to 2 decimal places
+                        revenueNum: {
+                            $toDouble: {
+                                $ifNull: [
+                                    {
+                                        $let: {
+                                            vars: {
+                                                cleaned: {
+                                                    $regexFind: {
+                                                        input: { $toString: "$net_total" },
+                                                        regex: /[0-9]*\.?[0-9]{0,2}/
+                                                    }
+                                                }
+                                            },
+                                            in: {
+                                                $cond: {
+                                                    if: { $ne: ["$$cleaned", null] },
+                                                    then: "$$cleaned.match",
+                                                    else: "0"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    0
+                                ]
+                            }
+                        },
+                        streamsNum: {
+                            $toLong: {
+                                $ifNull: [
+                                    {
+                                        $let: {
+                                            vars: {
+                                                cleaned: {
+                                                    $regexFind: {
+                                                        input: { $toString: "$track_count" },
+                                                        regex: /[0-9]+/
+                                                    }
+                                                }
+                                            },
+                                            in: {
+                                                $cond: {
+                                                    if: { $ne: ["$$cleaned", null] },
+                                                    then: "$$cleaned.match",
+                                                    else: "0"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    0
+                                ]
+                            }
+                        }
                     }
                 },
                 {
@@ -2952,6 +3037,7 @@ class revenueUploadController {
 
             const dailyData = await TblReport2025.aggregate(dailyPipeline).allowDiskUse(true);
 
+            // Rest of the function remains the same...
             const uniqueUserIds = [...new Set(dailyData.map(d => d._id.user_id))];
 
             const contracts = uniqueUserIds.length
@@ -2982,11 +3068,40 @@ class revenueUploadController {
                 totalStreams += item.streams;
             });
 
+            console.log("totalRevenue", totalRevenue);
+            console.log("totalStreams", totalStreams);
+
             const chartPipeline = [
-                { $match: { date: dateFilter } },
+                { $match: matchStage },
                 {
                     $addFields: {
-                        revenueNum: { $toDouble: { $ifNull: ["$net_total", 0] } }
+                        // Apply the same cleaning here
+                        revenueNum: {
+                            $toDouble: {
+                                $ifNull: [
+                                    {
+                                        $let: {
+                                            vars: {
+                                                cleaned: {
+                                                    $regexFind: {
+                                                        input: { $toString: "$net_total" },
+                                                        regex: /[0-9]*\.?[0-9]{0,2}/
+                                                    }
+                                                }
+                                            },
+                                            in: {
+                                                $cond: {
+                                                    if: { $ne: ["$$cleaned", null] },
+                                                    then: "$$cleaned.match",
+                                                    else: "0"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    0
+                                ]
+                            }
+                        }
                     }
                 },
                 {
@@ -3048,34 +3163,319 @@ class revenueUploadController {
                 chartData.byCountry.map(c => [c._id || "Unknown", Number((c.revenue * ratio).toFixed(2))])
             );
 
+            // Decide where to save: per user or global
+            const saveUserId = isAdmin ? 'global' : userId;
+
             await RevenueSummary.updateOne(
-                { user_id: userId },
+                { user_id: saveUserId },
                 {
                     $set: {
                         netRevenueByMonth,
                         revenueByChannel,
                         revenueByCountry
                     },
-                    $setOnInsert: { user_id: userId }
+                    $setOnInsert: { user_id: saveUserId }
                 },
                 { upsert: true }
             );
 
-            await User.updateOne(
-                { id: userId },
-                {
-                    $set: {
-                        total_stream: totalStreams,
-                        total_revenue: Number(totalRevenue.toFixed(2))
+            // Only update User totals if it's a regular user (not admin/global)
+            if (!isAdmin) {
+                await User.updateOne(
+                    { id: userId },
+                    {
+                        $set: {
+                            total_stream: totalStreams,
+                            total_revenue: Number(totalRevenue.toFixed(2))
+                        }
                     }
-                }
-            );
+                );
+            }
+
         } catch (error) {
             console.log(error);
-
         }
     }
 
+    //calculateRevenueForSuperAdminandManager method
+    async calculateRevenueForSuperAdminandManager() {
+        try {
+            // Fetch all Super Admin and Manager users
+            const admins = await User.find({ role: { $in: ['Super Admin', 'Manager'] } }).lean();
+            if (!admins.length) {
+                console.log("No Super Admin or Manager found");
+                return;
+            }
+
+            const now = new Date();
+            const startDate = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+            const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+            const dateFilter = {
+                $gte: startDate.toISOString().split("T")[0],
+                $lte: endDate.toISOString().split("T")[0]
+            };
+
+            const dailyPipeline = [
+                {
+                    $addFields: {
+                        // Handle empty/null values properly
+                        revenueNum: {
+                            $let: {
+                                vars: {
+                                    netTotalStr: {
+                                        $cond: {
+                                            if: { $eq: ["$net_total", null] },
+                                            then: "0",
+                                            else: { $toString: "$net_total" }
+                                        }
+                                    },
+                                    cleaned: {
+                                        $regexFind: {
+                                            input: {
+                                                $cond: {
+                                                    if: { $eq: ["$net_total", null] },
+                                                    then: "0",
+                                                    else: { $toString: "$net_total" }
+                                                }
+                                            },
+                                            regex: /[0-9]*\.?[0-9]{0,2}/
+                                        }
+                                    }
+                                },
+                                in: {
+                                    $cond: {
+                                        if: {
+                                            $and: [
+                                                { $ne: ["$$cleaned", null] },
+                                                { $ne: ["$$cleaned.match", ""] }
+                                            ]
+                                        },
+                                        then: { $toDouble: "$$cleaned.match" },
+                                        else: 0
+                                    }
+                                }
+                            }
+                        },
+                        streamsNum: {
+                            $let: {
+                                vars: {
+                                    trackCountStr: {
+                                        $cond: {
+                                            if: { $eq: ["$track_count", null] },
+                                            then: "0",
+                                            else: { $toString: "$track_count" }
+                                        }
+                                    },
+                                    cleaned: {
+                                        $regexFind: {
+                                            input: {
+                                                $cond: {
+                                                    if: { $eq: ["$track_count", null] },
+                                                    then: "0",
+                                                    else: { $toString: "$track_count" }
+                                                }
+                                            },
+                                            regex: /[0-9]+/
+                                        }
+                                    }
+                                },
+                                in: {
+                                    $cond: {
+                                        if: {
+                                            $and: [
+                                                { $ne: ["$$cleaned", null] },
+                                                { $ne: ["$$cleaned.match", ""] }
+                                            ]
+                                        },
+                                        then: { $toLong: "$$cleaned.match" },
+                                        else: 0
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    $group: {
+                        _id: { user_id: "$user_id", date: "$date" },
+                        revenue: { $sum: "$revenueNum" },
+                        streams: { $sum: "$streamsNum" }
+                    }
+                }
+            ];
+
+            const dailyData = await TblReport2025.aggregate(dailyPipeline).allowDiskUse(true);
+
+            const uniqueUserIds = [...new Set(dailyData.map(d => d._id.user_id))];
+
+            const contracts = uniqueUserIds.length
+                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+                : [];
+
+            const contractMap = new Map();
+            contracts.forEach(c => {
+                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                contractMap.get(c.user_id).push(c);
+            });
+
+            let totalRevenue = 0;
+            let totalStreams = 0;
+
+            dailyData.forEach(item => {
+                let revenue = item.revenue;
+
+                const userContracts = contractMap.get(item._id.user_id) || [];
+                for (const c of userContracts) {
+                    if (item._id.date >= c.startDate && item._id.date <= c.endDate) {
+                        revenue *= (100 - (c.labelPercentage || 0)) / 100;
+                        break;
+                    }
+                }
+
+                totalRevenue += revenue;
+                totalStreams += item.streams;
+            });
+            console.log("totalRevenue", totalRevenue);
+            console.log("totalStreams", totalStreams);
+
+            const chartPipeline = [
+                { $match: { date: dateFilter } },
+                {
+                    $addFields: {
+                        // Apply the same cleaning here
+                        revenueNum: {
+                            $let: {
+                                vars: {
+                                    netTotalStr: {
+                                        $cond: {
+                                            if: { $eq: ["$net_total", null] },
+                                            then: "0",
+                                            else: { $toString: "$net_total" }
+                                        }
+                                    },
+                                    cleaned: {
+                                        $regexFind: {
+                                            input: {
+                                                $cond: {
+                                                    if: { $eq: ["$net_total", null] },
+                                                    then: "0",
+                                                    else: { $toString: "$net_total" }
+                                                }
+                                            },
+                                            regex: /[0-9]*\.?[0-9]{0,2}/
+                                        }
+                                    }
+                                },
+                                in: {
+                                    $cond: {
+                                        if: {
+                                            $and: [
+                                                { $ne: ["$$cleaned", null] },
+                                                { $ne: ["$$cleaned.match", ""] }
+                                            ]
+                                        },
+                                        then: { $toDouble: "$$cleaned.match" },
+                                        else: 0
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    $facet: {
+                        byMonth: [
+                            {
+                                $group: {
+                                    _id: {
+                                        $dateToString: {
+                                            format: "%Y-%m",
+                                            date: { $dateFromString: { dateString: "$date" } }
+                                        }
+                                    },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { _id: 1 } }
+                        ],
+                        byChannel: [
+                            {
+                                $group: {
+                                    _id: { $ifNull: ["$retailer", "Unknown"] },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            }
+                        ],
+                        byCountry: [
+                            {
+                                $group: {
+                                    _id: { $ifNull: ["$territory", "Unknown"] },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            { $limit: 10 }
+                        ]
+                    }
+                }
+            ];
+
+            const [chartData] = await TblReport2025.aggregate(chartPipeline).allowDiskUse(true);
+
+            const last12Months = getLast12Months();
+            const grossTotal = chartData.byMonth.reduce((s, m) => s + m.revenue, 0);
+            const ratio = grossTotal > 0 ? totalRevenue / grossTotal : 1;
+
+            const monthMap = Object.fromEntries(chartData.byMonth.map(m => [m._id, m.revenue]));
+
+            const netRevenueByMonth = {};
+            last12Months.forEach(m => {
+                netRevenueByMonth[m] = Number(((monthMap[m] || 0) * ratio).toFixed(2));
+            });
+
+            const revenueByChannel = Object.fromEntries(
+                chartData.byChannel.map(c => [c._id || "Unknown", Number((c.revenue * ratio).toFixed(2))])
+            );
+
+            const revenueByCountry = Object.fromEntries(
+                chartData.byCountry.map(c => [c._id || "Unknown", Number((c.revenue * ratio).toFixed(2))])
+            );
+
+            // Update for each Super Admin and Manager
+            for (const admin of admins) {
+                const adminUserId = admin.id; // Assuming 'id' is the field for user_id
+
+                await RevenueSummary.updateOne(
+                    { user_id: adminUserId },
+                    {
+                        $set: {
+                            netRevenueByMonth,
+                            revenueByChannel,
+                            revenueByCountry
+                        },
+                        $setOnInsert: { user_id: adminUserId }
+                    },
+                    { upsert: true }
+                );
+
+                await User.updateOne(
+                    { id: adminUserId },
+                    {
+                        $set: {
+                            total_stream: totalStreams,
+                            total_revenue: Number(totalRevenue.toFixed(2))
+                        }
+                    }
+                );
+            }
+
+        } catch (error) {
+            console.log(error);
+        }
+    }
+
+    //getUserRevenueSummary method
     async getUserRevenueSummary(req, res, next) {
         try {
             const { userId } = req.user;
