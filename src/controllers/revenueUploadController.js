@@ -1003,7 +1003,6 @@ class revenueUploadController {
 
             const filter = {};
 
-            /** ========== USER ROLE FILTER ========== **/
             if (role && role !== "Super Admin" && role !== "Manager") {
                 const users = await User.find({ parent_id: userId }, { id: 1 }).lean();
                 const childIds = users.map(u => u.id);
@@ -1012,7 +1011,6 @@ class revenueUploadController {
             }
             if (labelId) filter.user_id = Number(labelId);
 
-            /** ========== PLATFORM FILTER ========== **/
             const defaultRetailers = ["Apple Music", "Spotify", "Gaana", "Jio Saavn", "Facebook", "Amazon", "TikTok"];
             if (platform && platform !== "") {
                 filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
@@ -1020,7 +1018,6 @@ class revenueUploadController {
                 filter.retailer = { $in: defaultRetailers };
             }
 
-            /** ========== DATE FILTER ========== **/
             const selectedYear = year ? parseInt(year) : new Date().getFullYear();
             if (year && !month && !fromDate && !toDate) {
                 filter.date = { $gte: `${selectedYear}-01-01`, $lte: `${selectedYear}-12-31` };
@@ -1043,155 +1040,114 @@ class revenueUploadController {
             const limitNum = parseInt(limit);
             const skipNum = (pageNum - 1) * limitNum;
 
-            /** ========== DAILY AGGREGATION ========== **/
-            const dailyData = await TblReport2025.aggregate([
+            const hasGrouping = releases === "true" || artist === "true" || track === "true" || territory === "true";
+
+            let pipeline = [
                 { $match: filter },
                 {
                     $addFields: {
-                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } }
-                    }
-                },
-                {
-                    $group: {
-                        _id: { user_id: "$user_id", date: "$date" },
-                        dailyRevenue: { $sum: "$revenueNum" }
-                    }
-                },
-                {
-                    $project: {
-                        user_id: "$_id.user_id",
-                        date: "$_id.date",
-                        dailyRevenue: 1,
-                        _id: 0
-                    }
-                }
-            ]).allowDiskUse(true);
-
-            /** ========== CONTRACT DEDUCTION APPLY ========== **/
-            const uniqueUserIds = [...new Set(dailyData.map(d => d.user_id).filter(Boolean))];
-            const contracts = uniqueUserIds.length > 0
-                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
-                : [];
-
-            const contractMap = new Map();
-            contracts.forEach(c => {
-                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
-                contractMap.get(c.user_id).push(c);
-            });
-
-            const dailyDeducted = dailyData.map(item => {
-                let deducted = item.dailyRevenue;
-                const userContracts = contractMap.get(item.user_id) || [];
-                for (const contract of userContracts) {
-                    if (item.date >= contract.startDate && item.date <= contract.endDate) {
-                        const percentage = contract.labelPercentage || 0;
-                        deducted = item.dailyRevenue * ((100 - percentage) / 100);
-                        break;
-                    }
-                }
-                return { date: item.date, user_id: item.user_id, deductedRevenue: deducted };
-            });
-
-            let groupId = { user_id: "$user_id" };
-
-            let sampleFields = {
-                sampleDate: { $first: "$date" },
-                samplePlatform: { $first: "$retailer" },
-                sampleRelease: { $first: "$release" },
-                sampleArtist: { $first: "$track_artist" },
-                sampleISRC: { $first: "$isrc_code" }       // ALWAYS KEEP SAMPLE ISRC
-            };
-
-            if (artist === "true") {
-                groupId.artist = { $ifNull: ["$track_artist", "Unknown Artist"] };
-            }
-            if (releases === "true") {
-                groupId.release = { $ifNull: ["$release", "Unknown Release"] };
-            }
-            if (territory === "true") {
-                groupId.territory = { $ifNull: ["$territory", "Unknown"] };
-            }
-            if (track === "true") {
-                groupId.isrc_code = { $ifNull: ["$isrc_code", "Unknown"] };  // GROUP BY TRACK
-            }
-
-            const pipeline = [
-                { $match: filter },
-                {
-                    $addFields: {
-                        revenueNum: {
-                            $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 }
+                        netRevenue: {
+                            $multiply: [
+                                { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } },
+                                { $divide: [{ $subtract: [100, { $ifNull: ["$percentage", 0] }] }, 100] }
+                            ]
                         }
-                    }
-                },
-                {
-                    $group: {
-                        _id: groupId,
-                        grossRevenue: { $sum: "$revenueNum" },
-                        ...sampleFields
                     }
                 }
             ];
 
-            const artistData = await TblReport2025.aggregate(pipeline).allowDiskUse(true);
+            let totalRecords = 0;
 
-            /** ===== APPLY DEDUCTION RATIO ===== */
-            const includeTrack = track === "true";
-            const includeRelease = releases === "true";
+            if (hasGrouping) {
+                let groupId = {};
 
-            const artistReports = artistData.map(item => {
-                const userDaily = dailyDeducted.filter(d => d.user_id === item._id.user_id);
+                if (artist === "true") groupId.artist = { $ifNull: ["$track_artist", "Unknown Artist"] };
+                if (releases === "true") groupId.release = { $ifNull: ["$release", "Unknown Release"] };
+                if (track === "true") groupId.isrc_code = { $ifNull: ["$isrc_code", "Unknown"] };
+                if (territory === "true") groupId.territory = { $ifNull: ["$territory", "Global"] };
 
-                const totalGrossForUser = userDaily.reduce(
-                    (s, d) =>
-                        s +
-                        (dailyData.find(dd => dd.user_id === item._id.user_id && dd.date === d.date)
-                            ?.dailyRevenue || 0),
-                    0
+                pipeline.push(
+                    {
+                        $group: {
+                            _id: groupId,
+                            revenue: { $sum: "$netRevenue" },
+                            sampleDate: { $first: "$date" },
+                            samplePlatform: { $first: "$retailer" },
+                            sampleArtist: { $first: "$track_artist" },
+                            sampleRelease: { $first: "$release" },
+                            sampleISRC: { $first: "$isrc_code" }
+                        }
+                    },
+                    { $sort: { revenue: -1 } }
                 );
 
-                const totalDeductedForUser = userDaily.reduce((s, d) => s + d.deductedRevenue, 0);
+                // Get total count
+                const countPipeline = [...pipeline, { $count: "total" }];
+                const countResult = await TblReport2025.aggregate(countPipeline).allowDiskUse(true);
+                totalRecords = countResult[0]?.total || 0;
 
-                const deductionRatio =
-                    totalGrossForUser > 0 ? totalDeductedForUser / totalGrossForUser : 1;
+                // Add pagination
+                pipeline.push({ $skip: skipNum }, { $limit: limitNum });
 
-                const baseResponse = {
+                const groupedData = await TblReport2025.aggregate(pipeline).allowDiskUse(true);
+
+                const reports = groupedData.map(item => ({
                     artist: item._id.artist || item.sampleArtist || "Unknown Artist",
-                    // release: item._id.release || item.sampleRelease || "Unknown Release",
+                    release: item._id.release || item.sampleRelease || "Unknown Release",
+                    isrc_code: item._id.isrc_code || item.sampleISRC || "Unknown",
                     territory: item._id.territory || "Global",
-                    revenue: Number((item.grossRevenue * deductionRatio).toFixed(2)),
+                    revenue: Number(item.revenue.toFixed(2)),
                     date: item.sampleDate,
-                    platform: item.samplePlatform || "Various",
-                    user_id: item._id.user_id,
-                };
+                    platform: item.samplePlatform || "Various"
+                }));
 
-                // Conditional add ISRC only when group by track
-                if (includeTrack) {
-                    baseResponse.isrc_code = item._id.isrc_code || item.sampleISRC || "Unknown";
-                } else if (includeRelease) {
-                    baseResponse.release = item._id.release || item.sampleRelease || "Unknown";
-                }
-
-                return baseResponse;
-            }).sort((a, b) => b.revenue - a.revenue);
-
-
-            /** PAGINATION **/
-            const totalRecords = artistReports.length;
-            const paginatedReports = artistReports.slice(skipNum, skipNum + limitNum);
-
-            return res.json({
-                success: true,
-                data: {
-                    reports: paginatedReports,
-                    pagination: {
-                        totalRecords,
-                        totalPages: Math.ceil(totalRecords / limitNum),
-                        currentPage: pageNum,
-                        limit: limitNum
+                return res.json({
+                    success: true,
+                    data: {
+                        reports,
+                        pagination: {
+                            totalRecords,
+                            totalPages: Math.ceil(totalRecords / limitNum),
+                            currentPage: pageNum,
+                            limit: limitNum
+                        }
                     }
-                }
-            });
+                });
+
+            } else {
+                // No grouping → show individual rows, paginated at DB level
+                const countResult = await TblReport2025.countDocuments(filter);
+                totalRecords = countResult;
+
+                const rawData = await TblReport2025.find(filter)
+                    .select('date retailer track_artist release isrc_code territory net_total percentage')
+                    .skip(skipNum)
+                    .limit(limitNum)
+                    .lean();
+
+                const reports = rawData.map(row => ({
+                    date: row.date,
+                    platform: row.retailer || "Unknown",
+                    artist: row.track_artist || "Unknown Artist",
+                    release: row.release || "Unknown Release",
+                    isrc_code: row.isrc_code || "Unknown",
+                    territory: row.territory || "Global",
+                    revenue: Number((row.net_total * (100 - (row.percentage || 0)) / 100).toFixed(2))
+                }));
+
+                return res.json({
+                    success: true,
+                    data: {
+                        reports,
+                        pagination: {
+                            totalRecords,
+                            totalPages: Math.ceil(totalRecords / limitNum),
+                            currentPage: pageNum,
+                            limit: limitNum
+                        }
+                    }
+                });
+            }
 
         } catch (error) {
             console.error("Error in getAudioStreamingRevenueReports:", error);
@@ -2973,57 +2929,23 @@ class revenueUploadController {
                     $addFields: {
                         // Fix: Extract only numbers and decimal point, limit to 2 decimal places
                         revenueNum: {
-                            $toDouble: {
-                                $ifNull: [
-                                    {
-                                        $let: {
-                                            vars: {
-                                                cleaned: {
-                                                    $regexFind: {
-                                                        input: { $toString: "$net_total" },
-                                                        regex: /[0-9]*\.?[0-9]{0,2}/
-                                                    }
-                                                }
-                                            },
-                                            in: {
-                                                $cond: {
-                                                    if: { $ne: ["$$cleaned", null] },
-                                                    then: "$$cleaned.match",
-                                                    else: "0"
-                                                }
-                                            }
-                                        }
-                                    },
-                                    0
-                                ]
-                            }
-                        },
-                        streamsNum: {
-                            $toLong: {
-                                $ifNull: [
-                                    {
-                                        $let: {
-                                            vars: {
-                                                cleaned: {
-                                                    $regexFind: {
-                                                        input: { $toString: "$track_count" },
-                                                        regex: /[0-9]+/
-                                                    }
-                                                }
-                                            },
-                                            in: {
-                                                $cond: {
-                                                    if: { $ne: ["$$cleaned", null] },
-                                                    then: "$$cleaned.match",
-                                                    else: "0"
-                                                }
-                                            }
-                                        }
-                                    },
-                                    0
-                                ]
+                            $convert: {
+                                input: "$net_total",
+                                to: "double",
+                                onError: 0,
+                                onNull: 0
                             }
                         }
+                        ,
+                        streamsNum: {
+                            $convert: {
+                                input: "$track_count",
+                                to: "long",
+                                onError: 0,
+                                onNull: 0
+                            }
+                        }
+
                     }
                 },
                 {
@@ -3077,31 +2999,19 @@ class revenueUploadController {
                     $addFields: {
                         // Apply the same cleaning here
                         revenueNum: {
-                            $toDouble: {
-                                $ifNull: [
-                                    {
-                                        $let: {
-                                            vars: {
-                                                cleaned: {
-                                                    $regexFind: {
-                                                        input: { $toString: "$net_total" },
-                                                        regex: /[0-9]*\.?[0-9]{0,2}/
-                                                    }
-                                                }
-                                            },
-                                            in: {
-                                                $cond: {
-                                                    if: { $ne: ["$$cleaned", null] },
-                                                    then: "$$cleaned.match",
-                                                    else: "0"
-                                                }
-                                            }
-                                        }
-                                    },
-                                    0
-                                ]
-                            }
+                            $cond: [
+                                { $in: [{ $type: "$net_total" }, ["double", "int", "long", "decimal"]] },
+                                "$net_total",
+                                {
+                                    $cond: [
+                                        { $eq: [{ $type: "$net_total" }, "string"] },
+                                        { $toDouble: "$net_total" },
+                                        0
+                                    ]
+                                }
+                            ]
                         }
+
                     }
                 },
                 {
@@ -3221,79 +3131,22 @@ class revenueUploadController {
                     $addFields: {
                         // Handle empty/null values properly
                         revenueNum: {
-                            $let: {
-                                vars: {
-                                    netTotalStr: {
-                                        $cond: {
-                                            if: { $eq: ["$net_total", null] },
-                                            then: "0",
-                                            else: { $toString: "$net_total" }
-                                        }
-                                    },
-                                    cleaned: {
-                                        $regexFind: {
-                                            input: {
-                                                $cond: {
-                                                    if: { $eq: ["$net_total", null] },
-                                                    then: "0",
-                                                    else: { $toString: "$net_total" }
-                                                }
-                                            },
-                                            regex: /[0-9]*\.?[0-9]{0,2}/
-                                        }
-                                    }
-                                },
-                                in: {
-                                    $cond: {
-                                        if: {
-                                            $and: [
-                                                { $ne: ["$$cleaned", null] },
-                                                { $ne: ["$$cleaned.match", ""] }
-                                            ]
-                                        },
-                                        then: { $toDouble: "$$cleaned.match" },
-                                        else: 0
-                                    }
-                                }
+                            $convert: {
+                                input: "$net_total",
+                                to: "double",
+                                onError: 0,
+                                onNull: 0
                             }
                         },
                         streamsNum: {
-                            $let: {
-                                vars: {
-                                    trackCountStr: {
-                                        $cond: {
-                                            if: { $eq: ["$track_count", null] },
-                                            then: "0",
-                                            else: { $toString: "$track_count" }
-                                        }
-                                    },
-                                    cleaned: {
-                                        $regexFind: {
-                                            input: {
-                                                $cond: {
-                                                    if: { $eq: ["$track_count", null] },
-                                                    then: "0",
-                                                    else: { $toString: "$track_count" }
-                                                }
-                                            },
-                                            regex: /[0-9]+/
-                                        }
-                                    }
-                                },
-                                in: {
-                                    $cond: {
-                                        if: {
-                                            $and: [
-                                                { $ne: ["$$cleaned", null] },
-                                                { $ne: ["$$cleaned.match", ""] }
-                                            ]
-                                        },
-                                        then: { $toLong: "$$cleaned.match" },
-                                        else: 0
-                                    }
-                                }
+                            $convert: {
+                                input: "$track_count",
+                                to: "long",
+                                onError: 0,
+                                onNull: 0
                             }
                         }
+
                     }
                 },
                 {
@@ -3345,42 +3198,19 @@ class revenueUploadController {
                     $addFields: {
                         // Apply the same cleaning here
                         revenueNum: {
-                            $let: {
-                                vars: {
-                                    netTotalStr: {
-                                        $cond: {
-                                            if: { $eq: ["$net_total", null] },
-                                            then: "0",
-                                            else: { $toString: "$net_total" }
-                                        }
-                                    },
-                                    cleaned: {
-                                        $regexFind: {
-                                            input: {
-                                                $cond: {
-                                                    if: { $eq: ["$net_total", null] },
-                                                    then: "0",
-                                                    else: { $toString: "$net_total" }
-                                                }
-                                            },
-                                            regex: /[0-9]*\.?[0-9]{0,2}/
-                                        }
-                                    }
-                                },
-                                in: {
-                                    $cond: {
-                                        if: {
-                                            $and: [
-                                                { $ne: ["$$cleaned", null] },
-                                                { $ne: ["$$cleaned.match", ""] }
-                                            ]
-                                        },
-                                        then: { $toDouble: "$$cleaned.match" },
-                                        else: 0
-                                    }
+                            $cond: [
+                                { $in: [{ $type: "$net_total" }, ["double", "int", "long", "decimal"]] },
+                                "$net_total",
+                                {
+                                    $cond: [
+                                        { $eq: [{ $type: "$net_total" }, "string"] },
+                                        { $toDouble: "$net_total" },
+                                        0
+                                    ]
                                 }
-                            }
+                            ]
                         }
+
                     }
                 },
                 {
@@ -3482,13 +3312,13 @@ class revenueUploadController {
 
             const data = await User.aggregate([
                 {
-                    $match: { id: userId }   // or _id if you use ObjectId
+                    $match: { id: userId }
                 },
                 {
                     $lookup: {
-                        from: "revenuesummaries",   // collection name
-                        localField: "id",           // User.id
-                        foreignField: "user_id",    // RevenueSummary.user_id
+                        from: "revenuesummaries",
+                        localField: "id",
+                        foreignField: "user_id",
                         as: "revenueSummary"
                     }
                 },
