@@ -67,6 +67,14 @@ const UserSchema = new mongoose.Schema({
         type: Number,
         default: null
     },
+    youtube_total_stream: {
+        type: Number,
+        default: null
+    },
+    youtube_total_revenue: {
+        type: Number,
+        default: null
+    },
     resetToken: {
         type: String,
         default: null

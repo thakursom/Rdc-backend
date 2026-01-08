@@ -20,6 +20,7 @@ const YoutubeReportHistory = require("../models/youtubeReportHistoryModel");
 const YouTube = require("../models/youtubeModel");
 const TempYoutube = require("../models/tempYoutubeModel");
 const RevenueSummary = require("../models/revenueSummaryModel");
+const YoutubeRevenueSummary = require("../models/youtubeRevenueSummaryModel");
 
 const monthMap = {
     Jan: '01', Feb: '02', Mar: '03', Apr: '04',
@@ -91,7 +92,16 @@ class revenueUploadController {
             const labelIdentifiers = new Set();
             const rowsWithData = [];
 
-            jsonData.forEach(r => {
+            const normalizedRows = jsonData.map(row => {
+                const normalized = {};
+                Object.keys(row).forEach(key => {
+                    const trimmedKey = key.trim();
+                    normalized[trimmedKey] = row[key];
+                });
+                return normalized;
+            });
+
+            normalizedRows.forEach(r => {
                 let isrcCode = null;
                 let labelCodeFromFile = null;
                 let obj = {};
@@ -696,12 +706,13 @@ class revenueUploadController {
                 "YTPremiumRevenue"
             ];
 
-            // Choose the correct temp and final models
             const isYouTube = youtubePlatforms.includes(platform);
+
+            // Choose models
             const TempModel = isYouTube ? TempYoutube : TempReport;
             const FinalModel = isYouTube ? YouTube : TblReport2025;
 
-            // Fetch Temp data
+            // Fetch temp data
             const tempData = await TempModel.find({ uploadId }).lean();
 
             if (!tempData.length) {
@@ -713,11 +724,11 @@ class revenueUploadController {
 
             const cleanedData = tempData.map(({ _id, ...rest }) => rest);
 
-            // Collect unique user_ids
+            // Collect unique user_ids (exclude null/0)
             const userIds = [...new Set(
                 cleanedData
                     .map(r => r.user_id)
-                    .filter(id => id !== null && id !== 0)
+                    .filter(id => id !== null && id !== 0 && id !== undefined)
             )];
 
             // Fetch active contracts
@@ -730,15 +741,15 @@ class revenueUploadController {
             const toDate = (d) => {
                 if (!d) return null;
                 const parsed = new Date(d);
-                return isNaN(parsed) ? null : parsed;
+                return isNaN(parsed.getTime()) ? null : parsed;
             };
 
-            // Apply percentage to each row
+            // Apply label percentage to each row
             const finalData = cleanedData.map(row => {
                 const rowDate = toDate(row.date);
                 let percentage = 0;
 
-                if (rowDate) {
+                if (rowDate && row.user_id) {
                     const matchedContract = contracts.find(contract =>
                         contract.user_id === row.user_id &&
                         rowDate >= new Date(contract.startDate) &&
@@ -756,23 +767,39 @@ class revenueUploadController {
                 };
             });
 
-            // Insert into FinalModel
+            // Insert into final table
             await FinalModel.insertMany(finalData);
-            // await this.calculateRevenueSummary(userId);
-            const affectedUserIds = [...new Set(finalData.map(row => row.user_id).filter(id => id !== null && id !== undefined && id !== 0))];
-            console.log("affectedUserIds", affectedUserIds);
 
-            for (const id of affectedUserIds) {
-                await this.calculateRevenueSummary(id);  // Pass each affected user_id
+            // Get affected user IDs
+            const affectedUserIds = [...new Set(
+                finalData
+                    .map(row => row.user_id)
+                    .filter(id => id !== null && id !== undefined && id !== 0)
+            )];
+
+            console.log("affectedUserIds", affectedUserIds);
+            console.log("isYouTube upload:", isYouTube);
+
+            // === Conditional Revenue Calculation ===
+            if (isYouTube) {
+                // YouTube-specific calculations
+                for (const id of affectedUserIds) {
+                    await this.calculateYoutubeRevenueSummary(id);
+                }
+                await this.calculateYoutubeRevenueForSuperAdminandManager();
+            } else {
+                // Other platforms (Spotify, Apple, etc.)
+                for (const id of affectedUserIds) {
+                    await this.calculateRevenueSummary(id);
+                }
+                await this.calculateRevenueForSuperAdminandManager();
             }
 
-            await this.calculateRevenueForSuperAdminandManager();
-
-            // Clear TempModel
+            // Clear temp data
             await TempModel.deleteMany({ uploadId });
 
-            // Logging (use platform for consistency, fallback to retailer if available)
-            const logPlatform = tempData[0].retailer || platform;
+            // Logging
+            const logPlatform = tempData[0]?.retailer || platform;
 
             await LogService.createLog({
                 user_id: userId,
@@ -785,8 +812,9 @@ class revenueUploadController {
 
             return res.status(200).json({
                 success: true,
-                message: `Data moved from ${isYouTube ? 'TempYoutube' : 'TempReport'} to ${isYouTube ? 'YouTube' : 'TblReport_2025'} successfully`,
-                insertedCount: finalData.length
+                message: `Data moved from ${isYouTube ? 'TempYoutube' : 'TempReport'} to ${isYouTube ? 'Youtube' : 'TblReport_2025'} successfully`,
+                insertedCount: finalData.length,
+                platform: logPlatform
             });
 
         } catch (error) {
@@ -1435,7 +1463,7 @@ class revenueUploadController {
 
             const filter = {};
 
-            /** ========== USER ROLE FILTER ========== **/
+            // USER & LABEL FILTER
             if (role && role !== "Super Admin" && role !== "Manager") {
                 const users = await User.find({ parent_id: userId }, { id: 1 }).lean();
                 const childIds = users.map(u => u.id);
@@ -1444,7 +1472,7 @@ class revenueUploadController {
             }
             if (labelId) filter.user_id = Number(labelId);
 
-            /** ========== PLATFORM FILTER ========== **/
+            // PLATFORM FILTER
             const defaultRetailers = [
                 "SoundRecording",
                 "YouTubeArtTrack",
@@ -1454,23 +1482,22 @@ class revenueUploadController {
                 "YTPremiumRevenue"
             ];
 
-            filter.retailer = platform
-                ? { $in: platform.split(",").map(p => p.trim()) }
-                : { $in: defaultRetailers };
+            if (platform && platform !== "") {
+                filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
+            } else {
+                filter.retailer = { $in: defaultRetailers };
+            }
 
-            /** ========== DATE FILTER ========== **/
+            // DATE FILTER (supports year, month, or custom range)
             const selectedYear = year ? parseInt(year) : new Date().getFullYear();
 
             if (year && !month && !fromDate && !toDate) {
-                filter.date = {
-                    $gte: `${selectedYear}-01-01`,
-                    $lte: `${selectedYear}-12-31`
-                };
+                filter.date = { $gte: `${selectedYear}-01-01`, $lte: `${selectedYear}-12-31` };
             }
 
             if (month) {
-                const start = new Date(selectedYear, month - 1, 1);
-                const end = new Date(selectedYear, month, 0);
+                const start = new Date(selectedYear, parseInt(month) - 1, 1);
+                const end = new Date(selectedYear, parseInt(month), 0);
                 filter.date = {
                     $gte: start.toISOString().split("T")[0],
                     $lte: end.toISOString().split("T")[0]
@@ -1486,172 +1513,119 @@ class revenueUploadController {
                 };
             }
 
-            if (territory === "true")
-                filter.country = { $nin: ["", null, undefined] };
-
             const pageNum = parseInt(page);
             const limitNum = parseInt(limit);
             const skipNum = (pageNum - 1) * limitNum;
 
-            /** ========== DAILY AGGREGATION ========== **/
-            const dailyData = await YouTube.aggregate([
-                { $match: filter },
-                {
-                    $addFields: {
-                        revenueNum: {
-                            $convert: {
-                                input: "$total_revenue",
-                                to: "double",
-                                onError: 0,
-                                onNull: 0
+            const hasGrouping = releases === "true" || artist === "true" || track === "true" || territory === "true";
+
+            let totalRecords = 0;
+
+            if (hasGrouping) {
+                let groupId = {};
+
+                if (artist === "true") groupId.artist = { $ifNull: ["$track_artist", "Unknown Artist"] };
+                if (releases === "true") groupId.release = { $ifNull: ["$asset_title", "Unknown Release"] };
+                if (track === "true") groupId.isrc_code = { $ifNull: ["$isrc_code", "Unknown"] };
+                if (territory === "true") groupId.territory = { $ifNull: ["$country", "Global"] };
+
+                let pipeline = [
+                    { $match: filter },
+                    {
+                        $addFields: {
+                            netRevenue: {
+                                $multiply: [
+                                    { $toDouble: "$total_revenue" },
+                                    { $divide: [{ $subtract: [100, { $ifNull: ["$percentage", 0] }] }, 100] }
+                                ]
                             }
                         }
                     }
-                },
-                {
-                    $group: {
-                        _id: { user_id: "$user_id", date: "$date" },
-                        dailyRevenue: { $sum: "$revenueNum" }
-                    }
-                },
-                {
-                    $project: {
-                        user_id: "$_id.user_id",
-                        date: "$_id.date",
-                        dailyRevenue: 1,
-                        _id: 0
-                    }
-                }
-            ]).allowDiskUse(true);
+                ];
 
-            /** ========== CONTRACT DEDUCTION ========== **/
-            const uniqueUserIds = [...new Set(dailyData.map(d => d.user_id).filter(Boolean))];
-
-            const contracts = uniqueUserIds.length
-                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
-                : [];
-
-            const contractMap = new Map();
-            contracts.forEach(c => {
-                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
-                contractMap.get(c.user_id).push(c);
-            });
-
-            const dailyDeducted = dailyData.map(item => {
-                let deducted = item.dailyRevenue;
-                const userContracts = contractMap.get(item.user_id) || [];
-                for (const contract of userContracts) {
-                    if (item.date >= contract.startDate && item.date <= contract.endDate) {
-                        const percentage = contract.labelPercentage || 0;
-                        deducted = item.dailyRevenue * ((100 - percentage) / 100);
-                        break;
-                    }
-                }
-                return { date: item.date, user_id: item.user_id, deductedRevenue: deducted };
-            });
-
-            /** ========== GROUPING ========== **/
-            let groupId = { user_id: "$user_id" };
-
-            let sampleFields = {
-                sampleDate: { $first: "$date" },
-                samplePlatform: { $first: "$retailer" },
-                sampleArtist: { $first: "$track_artist" },
-                sampleRelease: { $first: "$asset_title" },
-                sampleISRC: { $first: "$isrc_code" }
-            };
-
-            if (artist === "true")
-                groupId.artist = { $ifNull: ["$track_artist", "Unknown Channel"] };
-
-            if (releases === "true")
-                groupId.release = { $ifNull: ["$asset_title", "Unknown Asset"] };
-
-            if (territory === "true")
-                groupId.country = { $ifNull: ["$country", "Unknown"] };
-
-            if (track === "true")
-                groupId.isrc_code = { $ifNull: ["$isrc_code", "Unknown"] };
-
-            const pipeline = [
-                { $match: filter },
-                {
-                    $addFields: {
-                        revenueNum: {
-                            $convert: {
-                                input: "$total_revenue",
-                                to: "double",
-                                onError: 0,
-                                onNull: 0
-                            }
+                pipeline.push(
+                    {
+                        $group: {
+                            _id: groupId,
+                            revenue: { $sum: "$netRevenue" },
+                            sampleDate: { $first: "$date" },
+                            samplePlatform: { $first: "$retailer" },
+                            sampleArtist: { $first: "$track_artist" },
+                            sampleRelease: { $first: "$asset_title" },
+                            sampleISRC: { $first: "$isrc_code" },
+                            sampleTerritory: { $first: "$country" }
                         }
-                    }
-                },
-                {
-                    $group: {
-                        _id: groupId,
-                        grossRevenue: { $sum: "$revenueNum" },
-                        ...sampleFields
-                    }
-                }
-            ];
-
-            const artistData = await YouTube.aggregate(pipeline).allowDiskUse(true);
-
-            /** ========== APPLY DEDUCTION RATIO ========== **/
-            const includeTrack = track === "true";
-            const includeRelease = releases === "true";
-
-            const reports = artistData.map(item => {
-                const userDaily = dailyDeducted.filter(d => d.user_id === item._id.user_id);
-
-                const totalGross = userDaily.reduce(
-                    (s, d) =>
-                        s +
-                        (dailyData.find(dd =>
-                            dd.user_id === item._id.user_id && dd.date === d.date
-                        )?.dailyRevenue || 0),
-                    0
+                    },
+                    { $sort: { revenue: -1 } }
                 );
 
-                const totalDeducted = userDaily.reduce((s, d) => s + d.deductedRevenue, 0);
+                // Get total count
+                const countPipeline = [...pipeline, { $count: "total" }];
+                const countResult = await YouTube.aggregate(countPipeline).allowDiskUse(true);
+                totalRecords = countResult[0]?.total || 0;
 
-                const ratio = totalGross > 0 ? totalDeducted / totalGross : 1;
+                // Add pagination
+                pipeline.push({ $skip: skipNum }, { $limit: limitNum });
 
-                const base = {
-                    artist: item._id.artist || item.sampleArtist || "Unknown Channel",
-                    territory: item._id.country || "Global",
-                    revenue: +(item.grossRevenue * ratio).toFixed(2),
-                    date: item.sampleDate,
-                    platform: item.samplePlatform || "YouTube",
-                    user_id: item._id.user_id
-                };
+                const groupedData = await YouTube.aggregate(pipeline).allowDiskUse(true);
 
-                if (includeTrack) {
-                    base.isrc_code = item._id.isrc_code || item.sampleISRC || "Unknown";
-                } else if (includeRelease) {
-                    base.release = item._id.release || item.sampleRelease || "Unknown Asset";
-                }
+                const reports = groupedData.map(item => ({
+                    artist: item._id.artist || item.sampleArtist || "Unknown Artist",
+                    release: item._id.release || item.sampleRelease || "Unknown Release",
+                    isrc_code: item._id.isrc_code || item.sampleISRC || "Unknown",
+                    territory: item._id.territory || item.sampleTerritory || "Global",
+                    revenue: Number(item.revenue.toFixed(2)),
+                    date: item.sampleDate || "-",
+                    platform: item.samplePlatform || "YouTube"
+                }));
 
-                return base;
-            }).sort((a, b) => b.revenue - a.revenue);
-
-            /** ========== PAGINATION ========== **/
-            const totalRecords = reports.length;
-            const paginatedReports = reports.slice(skipNum, skipNum + limitNum);
-
-            res.json({
-                success: true,
-                data: {
-                    reports: paginatedReports,
-                    pagination: {
-                        totalRecords,
-                        totalPages: Math.ceil(totalRecords / limitNum),
-                        currentPage: pageNum,
-                        limit: limitNum
+                return res.json({
+                    success: true,
+                    data: {
+                        reports,
+                        pagination: {
+                            totalRecords,
+                            totalPages: Math.ceil(totalRecords / limitNum),
+                            currentPage: pageNum,
+                            limit: limitNum
+                        }
                     }
-                }
-            });
+                });
+
+            } else {
+                // No grouping → individual rows
+                const countResult = await YouTube.countDocuments(filter);
+                totalRecords = countResult;
+
+                const rawData = await YouTube.find(filter)
+                    .select('date retailer track_artist asset_title isrc_code country total_revenue percentage')
+                    .skip(skipNum)
+                    .limit(limitNum)
+                    .lean();
+
+                const reports = rawData.map(row => ({
+                    date: row.date || "-",
+                    platform: row.retailer || "YouTube",
+                    artist: row.track_artist || "Unknown Artist",
+                    release: row.asset_title || "Unknown Release",
+                    isrc_code: row.isrc_code || "Unknown",
+                    territory: row.country || "Global",
+                    revenue: Number((row.total_revenue * (100 - (row.percentage || 0)) / 100).toFixed(2))
+                }));
+
+                return res.json({
+                    success: true,
+                    data: {
+                        reports,
+                        pagination: {
+                            totalRecords,
+                            totalPages: Math.ceil(totalRecords / limitNum),
+                            currentPage: pageNum,
+                            limit: limitNum
+                        }
+                    }
+                });
+            }
 
         } catch (error) {
             console.error("Error in getYoutubeRevenueReports:", error);
@@ -3354,6 +3328,447 @@ class revenueUploadController {
         }
     }
 
+    // calculateYoutubeRevenueSummary method
+    async calculateYoutubeRevenueSummary(userId) {
+        try {
+            const user = await User.findOne({ id: userId }).select('role').lean();
+            if (!user) {
+                console.error(`User not found for id: ${userId}`);
+                return;
+            }
+
+            const isAdmin = ['Super Admin', 'Manager'].includes(user.role);
+
+            const now = new Date();
+            const startDate = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+            const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+            const dateFilter = {
+                $gte: startDate.toISOString().split("T")[0],
+                $lte: endDate.toISOString().split("T")[0]
+            };
+
+            const matchStage = isAdmin
+                ? { date: dateFilter }
+                : { user_id: userId, date: dateFilter };
+
+            // Step 1: Daily aggregation using total_revenue (INR) and total_play
+            const dailyPipeline = [
+                { $match: isAdmin ? { date: dateFilter } : { user_id: userId, date: dateFilter } },
+                {
+                    $addFields: {
+                        revenueNum: {
+                            $convert: {
+                                input: "$total_revenue",
+                                to: "double",
+                                onError: 0,
+                                onNull: 0
+                            }
+                        },
+                        streamsNum: {
+                            $convert: {
+                                input: "$total_play",
+                                to: "long",
+                                onError: 0,
+                                onNull: 0
+                            }
+                        }
+                    }
+                },
+                {
+                    $group: {
+                        _id: { user_id: "$user_id", date: "$date" },
+                        revenue: { $sum: "$revenueNum" },
+                        streams: { $sum: "$streamsNum" }
+                    }
+                }
+            ];
+
+            const dailyData = await YouTube.aggregate(dailyPipeline).allowDiskUse(true);
+
+            // Fetch contracts
+            const uniqueUserIds = [...new Set(dailyData.map(d => d._id.user_id).filter(Boolean))];
+
+            const contracts = uniqueUserIds.length
+                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+                : [];
+
+            const contractMap = new Map();
+            contracts.forEach(c => {
+                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                contractMap.get(c.user_id).push(c);
+            });
+
+            // Apply label deduction
+            let totalNetRevenue = 0;
+            let totalStreams = 0;
+
+            dailyData.forEach(item => {
+                let revenue = item.revenue;
+                totalStreams += item.streams;
+
+                const userContracts = contractMap.get(item._id.user_id) || [];
+                for (const contract of userContracts) {
+                    if (item._id.date >= contract.startDate && item._id.date <= contract.endDate) {
+                        revenue *= (100 - (contract.labelPercentage || 0)) / 100;
+                        break;
+                    }
+                }
+
+                totalNetRevenue += revenue;
+            });
+
+            console.log("YouTube Total Net Revenue (INR):", totalNetRevenue);
+            console.log("YouTube Total Streams:", totalStreams);
+
+            // Step 2: Chart data (gross INR revenue)
+            const chartPipeline = [
+                { $match: matchStage },
+                {
+                    $addFields: {
+                        revenueNum: {
+                            $convert: {
+                                input: "$total_revenue",
+                                to: "double",
+                                onError: 0,
+                                onNull: 0
+                            }
+                        }
+                    }
+                },
+                {
+                    $facet: {
+                        byMonth: [
+                            {
+                                $group: {
+                                    _id: {
+                                        $dateToString: {
+                                            format: "%Y-%m",
+                                            date: { $dateFromString: { dateString: "$date" } }
+                                        }
+                                    },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { _id: 1 } }
+                        ],
+                        byChannel: [
+                            {
+                                $group: {
+                                    _id: { $ifNull: ["$retailer", "YouTube"] },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            }
+                        ],
+                        byCountry: [
+                            {
+                                $group: {
+                                    _id: { $ifNull: ["$country", "Unknown"] },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            { $limit: 10 }
+                        ]
+                    }
+                }
+            ];
+
+            const [chartData] = await YouTube.aggregate(chartPipeline).allowDiskUse(true);
+
+            const last12Months = getLast12Months();
+            const grossTotal = chartData.byMonth.reduce((sum, m) => sum + m.revenue, 0);
+            const ratio = grossTotal > 0 ? totalNetRevenue / grossTotal : 1;
+
+            const monthMap = Object.fromEntries(chartData.byMonth.map(m => [m._id, m.revenue]));
+
+            const netRevenueByMonth = {};
+            last12Months.forEach(month => {
+                netRevenueByMonth[month] = Number(((monthMap[month] || 0) * ratio).toFixed(2));
+            });
+
+            const revenueByChannel = Object.fromEntries(
+                chartData.byChannel.map(c => [c._id, Number((c.revenue * ratio).toFixed(2))])
+            );
+
+            const revenueByCountry = Object.fromEntries(
+                chartData.byCountry.map(c => [c._id, Number((c.revenue * ratio).toFixed(2))])
+            );
+
+            // Save to RevenueSummary
+            const saveUserId = isAdmin ? 'global' : userId;
+
+            await YoutubeRevenueSummary.updateOne(
+                { user_id: saveUserId },
+                {
+                    $set: {
+                        netRevenueByMonth,
+                        revenueByChannel,
+                        revenueByCountry,
+                        updatedAt: new Date()
+                    },
+                    $setOnInsert: { user_id: saveUserId }
+                },
+                { upsert: true }
+            );
+
+            // Update user totals (only for non-admins)
+            if (!isAdmin) {
+                await User.updateOne(
+                    { id: userId },
+                    {
+                        $set: {
+                            youtube_total_stream: totalStreams,
+                            youtube_total_revenue: Number(totalNetRevenue.toFixed(2))
+                        }
+                    }
+                );
+            }
+
+        } catch (error) {
+            console.error("Error in calculateYoutubeRevenueSummary:", error);
+        }
+    }
+
+    // calculateYoutubeRevenueForSuperAdminandManager method
+    async calculateYoutubeRevenueForSuperAdminandManager() {
+        try {
+            const admins = await User.find({ role: { $in: ['Super Admin', 'Manager'] } }).lean();
+            if (!admins.length) {
+                console.log("No Super Admin or Manager found");
+                return;
+            }
+
+            const now = new Date();
+            const startDate = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+            const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+            const dateFilter = {
+                $gte: startDate.toISOString().split("T")[0],
+                $lte: endDate.toISOString().split("T")[0]
+            };
+
+            // Daily aggregation (INR revenue)
+            const dailyPipeline = [
+                { $match: { date: dateFilter } },
+                {
+                    $addFields: {
+                        revenueNum: {
+                            $convert: {
+                                input: "$total_revenue",
+                                to: "double",
+                                onError: 0,
+                                onNull: 0
+                            }
+                        },
+                        streamsNum: {
+                            $convert: {
+                                input: "$total_play",
+                                to: "long",
+                                onError: 0,
+                                onNull: 0
+                            }
+                        }
+                    }
+                },
+                {
+                    $group: {
+                        _id: { user_id: "$user_id", date: "$date" },
+                        revenue: { $sum: "$revenueNum" },
+                        streams: { $sum: "$streamsNum" }
+                    }
+                }
+            ];
+
+            const dailyData = await YouTube.aggregate(dailyPipeline).allowDiskUse(true);
+
+            const uniqueUserIds = [...new Set(dailyData.map(d => d._id.user_id).filter(Boolean))];
+
+            const contracts = uniqueUserIds.length
+                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+                : [];
+
+            const contractMap = new Map();
+            contracts.forEach(c => {
+                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                contractMap.get(c.user_id).push(c);
+            });
+
+            let totalNetRevenue = 0;
+            let totalStreams = 0;
+
+            dailyData.forEach(item => {
+                let revenue = item.revenue;
+                totalStreams += item.streams;
+
+                const userContracts = contractMap.get(item._id.user_id) || [];
+                for (const contract of userContracts) {
+                    if (item._id.date >= contract.startDate && item._id.date <= contract.endDate) {
+                        revenue *= (100 - (contract.labelPercentage || 0)) / 100;
+                        break;
+                    }
+                }
+
+                totalNetRevenue += revenue;
+            });
+
+            console.log("All YouTube Total Net Revenue (INR):", totalNetRevenue);
+            console.log("All YouTube Total Streams:", totalStreams);
+
+            // Chart pipeline
+            const chartPipeline = [
+                { $match: { date: dateFilter } },
+                {
+                    $addFields: {
+                        revenueNum: {
+                            $convert: {
+                                input: "$total_revenue",
+                                to: "double",
+                                onError: 0,
+                                onNull: 0
+                            }
+                        }
+                    }
+                },
+                {
+                    $facet: {
+                        byMonth: [
+                            {
+                                $group: {
+                                    _id: {
+                                        $dateToString: {
+                                            format: "%Y-%m",
+                                            date: { $dateFromString: { dateString: "$date" } }
+                                        }
+                                    },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { _id: 1 } }
+                        ],
+                        byChannel: [
+                            {
+                                $group: {
+                                    _id: { $ifNull: ["$retailer", "YouTube"] },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            }
+                        ],
+                        byCountry: [
+                            {
+                                $group: {
+                                    _id: { $ifNull: ["$country", "Unknown"] },
+                                    revenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            { $limit: 10 }
+                        ]
+                    }
+                }
+            ];
+
+            const [chartData] = await YouTube.aggregate(chartPipeline).allowDiskUse(true);
+
+            const last12Months = getLast12Months();
+            const grossTotal = chartData.byMonth.reduce((s, m) => s + m.revenue, 0);
+            const ratio = grossTotal > 0 ? totalNetRevenue / grossTotal : 1;
+
+            const monthMap = Object.fromEntries(chartData.byMonth.map(m => [m._id, m.revenue]));
+
+            const netRevenueByMonth = {};
+            last12Months.forEach(m => {
+                netRevenueByMonth[m] = Number(((monthMap[m] || 0) * ratio).toFixed(2));
+            });
+
+            const revenueByChannel = Object.fromEntries(
+                chartData.byChannel.map(c => [c._id, Number((c.revenue * ratio).toFixed(2))])
+            );
+
+            const revenueByCountry = Object.fromEntries(
+                chartData.byCountry.map(c => [c._id, Number((c.revenue * ratio).toFixed(2))])
+            );
+
+            // Update all admins/managers
+            for (const admin of admins) {
+                await YoutubeRevenueSummary.updateOne(
+                    { user_id: admin.id },
+                    {
+                        $set: {
+                            netRevenueByMonth,
+                            revenueByChannel,
+                            revenueByCountry,
+                            updatedAt: new Date()
+                        },
+                        $setOnInsert: { user_id: admin.id }
+                    },
+                    { upsert: true }
+                );
+
+                await User.updateOne(
+                    { id: admin.id },
+                    {
+                        $set: {
+                            youtube_total_stream: totalStreams,
+                            youtube_total_revenue: Number(totalNetRevenue.toFixed(2))
+                        }
+                    }
+                );
+            }
+
+        } catch (error) {
+            console.error("Error in calculateYoutubeRevenueForSuperAdminandManager:", error);
+        }
+    }
+
+    //getUserRevenueSummary method
+    async getYoutubeUserRevenueSummary(req, res, next) {
+        try {
+            const { userId } = req.user;
+
+            const data = await User.aggregate([
+                {
+                    $match: { id: userId }
+                },
+                {
+                    $lookup: {
+                        from: "youtuberevenuesummaries",
+                        localField: "id",
+                        foreignField: "user_id",
+                        as: "revenueSummary"
+                    }
+                },
+                {
+                    $unwind: {
+                        path: "$revenueSummary",
+                        preserveNullAndEmptyArrays: true
+                    }
+                },
+                {
+                    $project: {
+                        _id: 0,
+                        id: 1,
+                        name: 1,
+                        email: 1,
+                        youtube_total_stream: 1,
+                        youtube_total_revenue: 1,
+                        netRevenueByMonth: "$revenueSummary.netRevenueByMonth",
+                        revenueByChannel: "$revenueSummary.revenueByChannel",
+                        revenueByCountry: "$revenueSummary.revenueByCountry",
+                        updatedAt: "$revenueSummary.updatedAt"
+                    }
+                }
+            ]);
+
+            return res.json({
+                success: true,
+                data: data[0] || null
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
 
 }
 
