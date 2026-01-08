@@ -1070,19 +1070,9 @@ class revenueUploadController {
 
             const hasGrouping = releases === "true" || artist === "true" || track === "true" || territory === "true";
 
-            let pipeline = [
-                { $match: filter },
-                {
-                    $addFields: {
-                        netRevenue: {
-                            $multiply: [
-                                { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } },
-                                { $divide: [{ $subtract: [100, { $ifNull: ["$percentage", 0] }] }, 100] }
-                            ]
-                        }
-                    }
-                }
-            ];
+            // Flags for conditional field inclusion
+            const includeTrack = track === "true";
+            const includeRelease = releases === "true";
 
             let totalRecords = 0;
 
@@ -1094,6 +1084,20 @@ class revenueUploadController {
                 if (track === "true") groupId.isrc_code = { $ifNull: ["$isrc_code", "Unknown"] };
                 if (territory === "true") groupId.territory = { $ifNull: ["$territory", "Global"] };
 
+                let pipeline = [
+                    { $match: filter },
+                    {
+                        $addFields: {
+                            netRevenue: {
+                                $multiply: [
+                                    { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } },
+                                    { $divide: [{ $subtract: [100, { $ifNull: ["$percentage", 0] }] }, 100] }
+                                ]
+                            }
+                        }
+                    }
+                ];
+
                 pipeline.push(
                     {
                         $group: {
@@ -1103,7 +1107,8 @@ class revenueUploadController {
                             samplePlatform: { $first: "$retailer" },
                             sampleArtist: { $first: "$track_artist" },
                             sampleRelease: { $first: "$release" },
-                            sampleISRC: { $first: "$isrc_code" }
+                            sampleISRC: { $first: "$isrc_code" },
+                            sampleTerritory: { $first: "$territory" }
                         }
                     },
                     { $sort: { revenue: -1 } }
@@ -1119,15 +1124,24 @@ class revenueUploadController {
 
                 const groupedData = await TblReport2025.aggregate(pipeline).allowDiskUse(true);
 
-                const reports = groupedData.map(item => ({
-                    artist: item._id.artist || item.sampleArtist || "Unknown Artist",
-                    release: item._id.release || item.sampleRelease || "Unknown Release",
-                    isrc_code: item._id.isrc_code || item.sampleISRC || "Unknown",
-                    territory: item._id.territory || "Global",
-                    revenue: Number(item.revenue.toFixed(2)),
-                    date: item.sampleDate,
-                    platform: item.samplePlatform || "Various"
-                }));
+                const reports = groupedData.map(item => {
+                    const baseResponse = {
+                        artist: item._id.artist || item.sampleArtist || "Unknown Artist",
+                        territory: item._id.territory || item.sampleTerritory || "Global",
+                        revenue: Number(item.revenue.toFixed(2)),
+                        date: item.sampleDate || "-",
+                        platform: item.samplePlatform || "Various"
+                    };
+
+                    // Conditional logic: track > release priority
+                    if (includeTrack) {
+                        baseResponse.isrc_code = item._id.isrc_code || item.sampleISRC || "Unknown";
+                    } else if (includeRelease) {
+                        baseResponse.release = item._id.release || item.sampleRelease || "Unknown Release";
+                    }
+
+                    return baseResponse;
+                });
 
                 return res.json({
                     success: true,
@@ -1143,7 +1157,7 @@ class revenueUploadController {
                 });
 
             } else {
-                // No grouping → show individual rows, paginated at DB level
+                // No grouping → individual rows
                 const countResult = await TblReport2025.countDocuments(filter);
                 totalRecords = countResult;
 
@@ -1154,7 +1168,7 @@ class revenueUploadController {
                     .lean();
 
                 const reports = rawData.map(row => ({
-                    date: row.date,
+                    date: row.date || "-",
                     platform: row.retailer || "Unknown",
                     artist: row.track_artist || "Unknown Artist",
                     release: row.release || "Unknown Release",
@@ -1519,6 +1533,10 @@ class revenueUploadController {
 
             const hasGrouping = releases === "true" || artist === "true" || track === "true" || territory === "true";
 
+            // Flags for conditional field inclusion (same as audio version)
+            const includeTrack = track === "true";
+            const includeRelease = releases === "true";
+
             let totalRecords = 0;
 
             if (hasGrouping) {
@@ -1569,15 +1587,25 @@ class revenueUploadController {
 
                 const groupedData = await YouTube.aggregate(pipeline).allowDiskUse(true);
 
-                const reports = groupedData.map(item => ({
-                    artist: item._id.artist || item.sampleArtist || "Unknown Artist",
-                    release: item._id.release || item.sampleRelease || "Unknown Release",
-                    isrc_code: item._id.isrc_code || item.sampleISRC || "Unknown",
-                    territory: item._id.territory || item.sampleTerritory || "Global",
-                    revenue: Number(item.revenue.toFixed(2)),
-                    date: item.sampleDate || "-",
-                    platform: item.samplePlatform || "YouTube"
-                }));
+                const reports = groupedData.map(item => {
+                    const baseResponse = {
+                        artist: item._id.artist || item.sampleArtist || "Unknown Artist",
+                        territory: item._id.territory || item.sampleTerritory || "Global",
+                        revenue: Number(item.revenue.toFixed(2)),
+                        date: item.sampleDate || "-",
+                        platform: item.samplePlatform || "YouTube"
+                    };
+
+                    // === SAME LOGIC AS AUDIO VERSION ===
+                    if (includeTrack) {
+                        baseResponse.isrc_code = item._id.isrc_code || item.sampleISRC || "Unknown";
+                    } else if (includeRelease) {
+                        baseResponse.release = item._id.release || item.sampleRelease || "Unknown Release";
+                    }
+                    // ===================================
+
+                    return baseResponse;
+                });
 
                 return res.json({
                     success: true,
