@@ -13,7 +13,7 @@ const ContractLogSchema = new mongoose.Schema({
     },
     action: {
         type: String,
-        enum: ["add", "update", "delete"],
+        enum: ["add", "update", "delete", "auto_renew"],
         required: true,
     },
     data: {

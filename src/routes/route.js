@@ -69,6 +69,7 @@ router.get("/getContractLogById", authMiddleware, contractController.getContract
 router.post("/sendContractReminder/:id", authMiddleware, contractController.sendContractReminder);
 router.post("/sendContractWhatsappReminder/:id", authMiddleware, contractController.sendContractWhatsappReminder);
 router.get("/fetchLabelAndSubLabelContract", authMiddleware, contractController.fetchLabelAndSubLabelContract);
+router.post("/contracts/auto-renew/:id", authMiddleware, contractController.autoRenewContract);
 
 
 //Xlsx Apis

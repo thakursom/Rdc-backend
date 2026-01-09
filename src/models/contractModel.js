@@ -15,31 +15,19 @@ const ContractSchema = new mongoose.Schema({
         default: ""
     },
     startDate: {
-         type: String,
+        type: String,
         required: true
     },
     endDate: {
         type: String,
         required: true,
     },
-    // artistPercentage: {
-    //     type: Number,
-    //     default: 0,
-    //     min: 0,
-    //     max: 100
-    // },
     labelPercentage: {
         type: Number,
         default: 0,
         min: 0,
         max: 100
     },
-    // producerPercentage: {
-    //     type: Number,
-    //     default: 0,
-    //     min: 0,
-    //     max: 100
-    // },
     pdf: {
         type: String, // File path or file name
         required: true,

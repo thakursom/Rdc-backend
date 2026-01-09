@@ -174,88 +174,6 @@ class contractController {
     }
 
     //getAllContracts method
-    // async getAllContracts(req, res, next) {
-    //     try {
-    //         let { page = 1, limit = 10, search = "" } = req.query;
-    //         page = Number(page);
-    //         limit = Number(limit);
-
-    //         // ✅ Build search query
-    //         const query = search
-    //             ? {
-    //                 $or: [
-    //                     { contractName: { $regex: search, $options: "i" } },
-    //                     { label: { $regex: search, $options: "i" } },
-    //                 ],
-    //             }
-    //             : {};
-
-    //         // ✅ Total count for pagination
-    //         const total = await Contract.countDocuments(query);
-
-    //         // ✅ Fetch paginated data with user details
-    //         const data = await Contract.aggregate([
-    //             { $match: query },
-
-    //             {
-    //                 $lookup: {
-    //                     from: "users",           // MongoDB collection name for User
-    //                     localField: "user_id",   // Contract.user_id
-    //                     foreignField: "id",      // User.id (Number)
-    //                     as: "user"
-    //                 }
-    //             },
-    //             {
-    //                 $unwind: {
-    //                     path: "$user",
-    //                     preserveNullAndEmptyArrays: true
-    //                 }
-    //             },
-
-    //             { $sort: { createdAt: -1 } },
-    //             { $skip: (page - 1) * limit },
-    //             { $limit: limit },
-
-    //             {
-    //                 $project: {
-    //                     _id: 1,
-    //                     user_id: 1,
-    //                     contractName: 1,
-    //                     description: 1,
-    //                     label: 1,
-    //                     startDate: 1,
-    //                     endDate: 1,
-    //                     pdf: 1,
-    //                     status: 1,
-    //                     createdAt: 1,
-    //                     userName: "$user.name",
-    //                     userEmail: "$user.email"
-    //                 }
-    //             }
-    //         ]);
-
-    //         // ✅ Send paginated response
-    //         return res.status(200).json({
-    //             success: true,
-    //             message: "Contracts fetched successfully",
-    //             data,
-    //             pagination: {
-    //                 total,
-    //                 page,
-    //                 limit,
-    //                 totalPages: Math.ceil(total / limit),
-    //             },
-    //         });
-
-    //     } catch (error) {
-    //         console.error("Fetch Contracts Error:", error);
-    //         return res.status(500).json({
-    //             success: false,
-    //             message: error.message || "Internal server error",
-    //         });
-    //     }
-    // }
-
     async getAllContracts(req, res, next) {
         try {
             let { page = 1, limit = 10, search = "" } = req.query;
@@ -819,6 +737,97 @@ class contractController {
                 success: false,
                 message: error.message
             });
+        }
+    }
+
+    // autoRenewContract method
+    async autoRenewContract(req, res, next) {
+        try {
+            const { id } = req.params;
+
+            if (!id) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Contract ID is required",
+                });
+            }
+
+            const existingContract = await Contract.findById(id);
+
+            if (!existingContract) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Contract not found",
+                });
+            }
+
+            const currentEndDate = new Date(existingContract.endDate);
+            if (isNaN(currentEndDate)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid endDate format in existing contract",
+                });
+            }
+
+            // Calculate new dates
+            const newStartDate = new Date(currentEndDate);
+            newStartDate.setDate(newStartDate.getDate() + 1);
+
+            const newEndDate = new Date(newStartDate);
+            newEndDate.setFullYear(newEndDate.getFullYear() + 1);
+
+            const formatDate = (date) => date.toISOString().split('T')[0];
+
+            const newStartDateStr = formatDate(newStartDate);
+            const newEndDateStr = formatDate(newEndDate);
+
+            let cleanDescription = (existingContract.description || "").trim();
+            const autoRenewTag = "(Auto-renewed)";
+
+            const escapedTag = autoRenewTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            cleanDescription = cleanDescription.replace(new RegExp(`\\s*${escapedTag}$`), "");
+
+
+            const newDescription = cleanDescription ? `${cleanDescription} ${autoRenewTag}` : autoRenewTag;
+
+            const renewedContract = await Contract.create({
+                user_id: existingContract.user_id,
+                contractName: existingContract.contractName + " (Renewed)",
+                description: newDescription,
+                startDate: newStartDateStr,
+                endDate: newEndDateStr,
+                labelPercentage: existingContract.labelPercentage,
+                pdf: existingContract.pdf,
+                status: "active",
+            });
+
+            await ContractLog.create({
+                user_id: existingContract.user_id,
+                contract_id: renewedContract._id,
+                action: "auto_renew",
+                data: {
+                    original_contract_id: existingContract._id,
+                    original_endDate: existingContract.endDate,
+                    new_contract_id: renewedContract._id,
+                    new_startDate: newStartDateStr,
+                    new_endDate: newEndDateStr,
+                },
+                message: `Contract "${existingContract.contractName}" auto-renewed for 1 year starting ${newStartDateStr}.`,
+                ipAddress: req.ip || "system",
+            });
+
+            await Contract.findByIdAndUpdate(id, { status: "expired" });
+
+            return res.status(200).json({
+                success: true,
+                message: "Contract auto-renewed successfully for 1 year",
+                data: renewedContract,
+            });
+
+        } catch (error) {
+            console.error("Auto Renew Contract Error:", error);
+            next(error);
         }
     }
 
