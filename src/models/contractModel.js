@@ -29,8 +29,12 @@ const ContractSchema = new mongoose.Schema({
         max: 100
     },
     pdf: {
-        type: String, // File path or file name
+        type: String,
         required: true,
+    },
+    auto_renew: {
+        type: Boolean,
+        default: false
     },
     status: {
         type: String,

@@ -8,6 +8,7 @@ const connectDB = require("./src/config/db");
 const routes = require("./src/routes/route");
 const errorHandler = require("./src/middlewares/errorHandler");
 const revenueUploadController = require('./src/controllers/revenueUploadController');
+const contractController = require("./src/controllers/contractController");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -52,6 +53,7 @@ cron.schedule('*/5 * * * *', async () => {
     try {
         // Process all pending reports (both audio and YouTube)
         await revenueUploadController.processAllPendingReports();
+        await contractController.autoRenewContractCron();
     } catch (error) {
         console.error('Error in cron job execution:', error);
     }

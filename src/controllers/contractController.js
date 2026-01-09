@@ -9,6 +9,8 @@ const sendEmail = require("../utils/sendEmail");
 const contractReminderTemplate = require("../utils/emailTemplates/contractReminderTemplate");
 const sendWhatsappMessage = require("../utils/messente");
 
+const formatDate = (date) => date.toISOString().split("T")[0];
+
 
 
 class contractController {
@@ -266,6 +268,7 @@ class contractController {
                         startDate: 1,
                         endDate: 1,
                         pdf: 1,
+                        auto_renew: 1,
                         status: 1,
                         createdAt: 1,
                         userName: "$user.name",
@@ -741,92 +744,124 @@ class contractController {
     }
 
     // autoRenewContract method
-    async autoRenewContract(req, res, next) {
+    async autoRenewContractCron() {
+        try {
+            const today = formatDate(new Date());
+
+            console.log("Auto-renew cron running for date:", today);
+
+            const contracts = await Contract.find({
+                auto_renew: true,
+                status: "active",
+                endDate: today
+            });
+
+            if (!contracts.length) {
+                console.log("No contracts eligible for auto-renew today");
+                return;
+            }
+
+            for (const existingContract of contracts) {
+                try {
+                    const currentEndDate = new Date(existingContract.endDate);
+                    if (isNaN(currentEndDate)) {
+                        console.error("Invalid endDate:", existingContract._id);
+                        continue;
+                    }
+
+                    const newStartDate = new Date(currentEndDate);
+                    newStartDate.setDate(newStartDate.getDate() + 1);
+
+                    const newEndDate = new Date(newStartDate);
+                    newEndDate.setFullYear(newEndDate.getFullYear() + 1);
+
+                    const newStartDateStr = formatDate(newStartDate);
+                    const newEndDateStr = formatDate(newEndDate);
+
+                    const autoRenewTag = "(Auto-renewed)";
+                    const escapedTag = autoRenewTag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+                    let cleanDescription = (existingContract.description || "")
+                        .trim()
+                        .replace(new RegExp(`\\s*${escapedTag}$`), "");
+
+                    const newDescription = cleanDescription
+                        ? `${cleanDescription} ${autoRenewTag}`
+                        : autoRenewTag;
+
+                    const renewedContract = await Contract.create({
+                        user_id: existingContract.user_id,
+                        contractName: `${existingContract.contractName} (Renewed)`,
+                        description: newDescription,
+                        startDate: newStartDateStr,
+                        endDate: newEndDateStr,
+                        labelPercentage: existingContract.labelPercentage,
+                        pdf: existingContract.pdf,
+                        auto_renew: existingContract.auto_renew,
+                        status: "active",
+                    });
+
+                    await ContractLog.create({
+                        user_id: existingContract.user_id,
+                        contract_id: renewedContract._id,
+                        action: "auto_renew",
+                        data: {
+                            original_contract_id: existingContract._id,
+                            original_endDate: existingContract.endDate,
+                            new_contract_id: renewedContract._id,
+                            new_startDate: newStartDateStr,
+                            new_endDate: newEndDateStr,
+                        },
+                        message: `Contract "${existingContract.contractName}" auto-renewed on ${today}`,
+                        ipAddress: "system-cron",
+                    });
+
+                    await Contract.findByIdAndUpdate(existingContract._id, {
+                        status: "expired"
+                    });
+
+                    console.log("Auto-renewed:", existingContract._id);
+
+                } catch (innerErr) {
+                    console.error(
+                        "Auto-renew failed for contract:",
+                        existingContract._id,
+                        innerErr
+                    );
+                }
+            }
+
+        } catch (error) {
+            console.error("Auto Renew Cron Error:", error);
+        }
+    }
+
+    //updateAutoRenew method
+    async updateAutoRenew(req, res, next) {
         try {
             const { id } = req.params;
+            const { autoRenew } = req.body;
 
-            if (!id) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Contract ID is required",
-                });
-            }
+            const contract = await Contract.findByIdAndUpdate(
+                id,
+                { auto_renew: autoRenew },
+                { new: true }
+            );
 
-            const existingContract = await Contract.findById(id);
-
-            if (!existingContract) {
+            if (!contract) {
                 return res.status(404).json({
                     success: false,
-                    message: "Contract not found",
+                    message: "Contract not found"
                 });
             }
-
-            const currentEndDate = new Date(existingContract.endDate);
-            if (isNaN(currentEndDate)) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Invalid endDate format in existing contract",
-                });
-            }
-
-            // Calculate new dates
-            const newStartDate = new Date(currentEndDate);
-            newStartDate.setDate(newStartDate.getDate() + 1);
-
-            const newEndDate = new Date(newStartDate);
-            newEndDate.setFullYear(newEndDate.getFullYear() + 1);
-
-            const formatDate = (date) => date.toISOString().split('T')[0];
-
-            const newStartDateStr = formatDate(newStartDate);
-            const newEndDateStr = formatDate(newEndDate);
-
-            let cleanDescription = (existingContract.description || "").trim();
-            const autoRenewTag = "(Auto-renewed)";
-
-            const escapedTag = autoRenewTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-            cleanDescription = cleanDescription.replace(new RegExp(`\\s*${escapedTag}$`), "");
-
-
-            const newDescription = cleanDescription ? `${cleanDescription} ${autoRenewTag}` : autoRenewTag;
-
-            const renewedContract = await Contract.create({
-                user_id: existingContract.user_id,
-                contractName: existingContract.contractName + " (Renewed)",
-                description: newDescription,
-                startDate: newStartDateStr,
-                endDate: newEndDateStr,
-                labelPercentage: existingContract.labelPercentage,
-                pdf: existingContract.pdf,
-                status: "active",
-            });
-
-            await ContractLog.create({
-                user_id: existingContract.user_id,
-                contract_id: renewedContract._id,
-                action: "auto_renew",
-                data: {
-                    original_contract_id: existingContract._id,
-                    original_endDate: existingContract.endDate,
-                    new_contract_id: renewedContract._id,
-                    new_startDate: newStartDateStr,
-                    new_endDate: newEndDateStr,
-                },
-                message: `Contract "${existingContract.contractName}" auto-renewed for 1 year starting ${newStartDateStr}.`,
-                ipAddress: req.ip || "system",
-            });
-
-            await Contract.findByIdAndUpdate(id, { status: "expired" });
 
             return res.status(200).json({
                 success: true,
-                message: "Contract auto-renewed successfully for 1 year",
-                data: renewedContract,
+                message: "Auto renew updated successfully",
+                data: contract
             });
-
         } catch (error) {
-            console.error("Auto Renew Contract Error:", error);
+            console.error("Auto renew update error:", error);
             next(error);
         }
     }

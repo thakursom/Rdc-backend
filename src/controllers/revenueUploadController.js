@@ -10,7 +10,6 @@ const ExcelJS = require('exceljs');
 const { excelSerialToISODate } = require("../utils/dateUtils");
 const LogService = require("../services/logService");
 const User = require("../models/userModel");
-const Release = require("../models/releaseModel");
 const Contract = require("../models/contractModel");
 const RevenueUpload = require("../models/RevenueUploadModel");
 const TempReport = require("../models/tempReportModel");
@@ -80,7 +79,6 @@ class revenueUploadController {
             const relativePath = `uploads/revenues/${req.file.filename}`;
             const fileURL = `${process.env.BASE_URL}/${relativePath}`;
 
-            // Read Excel
             const workbook = XLSX.readFile(req.file.path);
             const sheet = workbook.Sheets[workbook.SheetNames[0]];
             const jsonData = XLSX.utils.sheet_to_json(sheet);
@@ -106,7 +104,6 @@ class revenueUploadController {
                 let labelCodeFromFile = null;
                 let obj = {};
 
-                // FACEBOOK MAPPING
                 if (platform === "Facebook") {
                     isrcCode = r.elected_isrc;
                     labelCodeFromFile = r["Label ID"];
@@ -468,7 +465,6 @@ class revenueUploadController {
                 fileExt: req.file.mimetype,
             });
 
-            // Prepare final mapped rows with label_id
             const mappedRows = [];
             const today = new Date().toISOString().split("T")[0];
 
@@ -603,7 +599,6 @@ class revenueUploadController {
             const limitNum = parseInt(limit, 10);
             const skip = (pageNum - 1) * limitNum;
 
-            // Step 1: Find the RevenueUpload to determine the platform
             const revenueUpload = await RevenueUpload.findById(userId).select('platform').lean();
 
             if (!revenueUpload) {
@@ -615,7 +610,6 @@ class revenueUploadController {
 
             const { platform } = revenueUpload;
 
-            // Step 2: Define YouTube platforms that use TempYoutube
             const youtubePlatforms = [
                 "SoundRecording",
                 "YouTubeArtTrack",
@@ -625,11 +619,7 @@ class revenueUploadController {
                 "YTPremiumRevenue"
             ];
 
-            // Step 3: Choose the correct model
             const Model = youtubePlatforms.includes(platform) ? TempYoutube : TempReport;
-
-
-            // Step 4: Fetch data with pagination
             const revenues = await Model.find({
                 uploadId: userId
             })
@@ -680,7 +670,6 @@ class revenueUploadController {
                 });
             }
 
-            // Accept the upload
             const revenueUpload = await RevenueUpload.findByIdAndUpdate(
                 uploadId,
                 { isAccepted: true },
@@ -696,7 +685,6 @@ class revenueUploadController {
 
             const { platform } = revenueUpload;
 
-            // Define YouTube platforms
             const youtubePlatforms = [
                 "SoundRecording",
                 "YouTubeArtTrack",
@@ -707,12 +695,9 @@ class revenueUploadController {
             ];
 
             const isYouTube = youtubePlatforms.includes(platform);
-
-            // Choose models
             const TempModel = isYouTube ? TempYoutube : TempReport;
             const FinalModel = isYouTube ? YouTube : TblReport2025;
 
-            // Fetch temp data
             const tempData = await TempModel.find({ uploadId }).lean();
 
             if (!tempData.length) {
@@ -724,27 +709,23 @@ class revenueUploadController {
 
             const cleanedData = tempData.map(({ _id, ...rest }) => rest);
 
-            // Collect unique user_ids (exclude null/0)
             const userIds = [...new Set(
                 cleanedData
                     .map(r => r.user_id)
                     .filter(id => id !== null && id !== 0 && id !== undefined)
             )];
 
-            // Fetch active contracts
             const contracts = await Contract.find({
                 user_id: { $in: userIds },
                 status: "active"
             }).lean();
 
-            // Helper for safe date conversion
             const toDate = (d) => {
                 if (!d) return null;
                 const parsed = new Date(d);
                 return isNaN(parsed.getTime()) ? null : parsed;
             };
 
-            // Apply label percentage to each row
             const finalData = cleanedData.map(row => {
                 const rowDate = toDate(row.date);
                 let percentage = 0;
@@ -767,38 +748,27 @@ class revenueUploadController {
                 };
             });
 
-            // Insert into final table
             await FinalModel.insertMany(finalData);
 
-            // Get affected user IDs
             const affectedUserIds = [...new Set(
                 finalData
                     .map(row => row.user_id)
                     .filter(id => id !== null && id !== undefined && id !== 0)
             )];
 
-            console.log("affectedUserIds", affectedUserIds);
-            console.log("isYouTube upload:", isYouTube);
-
-            // === Conditional Revenue Calculation ===
             if (isYouTube) {
-                // YouTube-specific calculations
                 for (const id of affectedUserIds) {
                     await this.calculateYoutubeRevenueSummary(id);
                 }
                 await this.calculateYoutubeRevenueForSuperAdminandManager();
             } else {
-                // Other platforms (Spotify, Apple, etc.)
                 for (const id of affectedUserIds) {
                     await this.calculateRevenueSummary(id);
                 }
                 await this.calculateRevenueForSuperAdminandManager();
             }
 
-            // Clear temp data
             await TempModel.deleteMany({ uploadId });
-
-            // Logging
             const logPlatform = tempData[0]?.retailer || platform;
 
             await LogService.createLog({
@@ -831,12 +801,10 @@ class revenueUploadController {
     async getAudioStreamingRevenueSummary(req, res, next) {
         try {
             const {
-                labelId, platform, year, month, fromDate, toDate
+                labelId, platform, fromDate, toDate
             } = req.query;
 
             const { role, userId } = req.user;
-
-            // === Build filter (same as original) ===
             const filter = {};
             if (role && role !== "Super Admin" && role !== "Manager") {
                 const users = await User.find({ parent_id: userId }, { id: 1 }).lean();
@@ -846,22 +814,10 @@ class revenueUploadController {
             }
             if (labelId) filter.user_id = Number(labelId);
 
-            const defaultRetailers = ["Apple Music", "Spotify", "Gaana", "Jio Saavn", "Facebook", "Amazon", "TikTok"];
             if (platform && platform !== "") {
                 filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
-            } else {
-                filter.retailer = { $in: defaultRetailers };
             }
 
-            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-            if (year && !month && !fromDate && !toDate) {
-                filter.date = { $gte: `${selectedYear}-01-01`, $lte: `${selectedYear}-12-31` };
-            }
-            if (month) {
-                const start = new Date(selectedYear, parseInt(month) - 1, 1);
-                const end = new Date(selectedYear, parseInt(month), 0);
-                filter.date = { $gte: start.toISOString().split("T")[0], $lte: end.toISOString().split("T")[0] };
-            }
             if (fromDate && toDate) {
                 const [fy, fm] = fromDate.split("-").map(Number);
                 const [ty, tm] = toDate.split("-").map(Number);
@@ -871,11 +827,7 @@ class revenueUploadController {
                 };
             }
 
-            // if (artist === "true") filter.track_artist = { $nin: ["", null, undefined] };
-            // if (territory === "true") filter.territory = { $nin: ["", null, undefined] };
-            // if (releases === "true") filter.release = { $nin: ["", null, undefined] };
 
-            // === Step 1: Daily aggregation for revenue and streams ===
             const dailyPipeline = [
                 { $match: filter },
                 {
@@ -904,7 +856,6 @@ class revenueUploadController {
 
             const dailyData = await TblReport2025.aggregate(dailyPipeline).allowDiskUse(true);
 
-            // === Step 2: Fetch contracts and apply deductions ===
             const uniqueUserIds = [...new Set(dailyData.map(d => d.user_id).filter(Boolean))];
             const contracts = uniqueUserIds.length > 0
                 ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
@@ -916,7 +867,6 @@ class revenueUploadController {
                 contractMap.get(c.user_id).push(c);
             });
 
-            // Apply deductions
             let totalDeductedRevenue = 0;
             let totalStreams = 0;
             let entriesWithDeduction = 0;
@@ -948,7 +898,6 @@ class revenueUploadController {
 
             const avgDeductionPercentage = entriesWithDeduction > 0 ? sumDeductionPercent / entriesWithDeduction : 0;
 
-            // === Step 3: Charts data ===
             const chartPipeline = [
                 { $match: filter },
                 {
@@ -980,7 +929,6 @@ class revenueUploadController {
 
             const [chartResult] = await TblReport2025.aggregate(chartPipeline).allowDiskUse(true);
 
-            // Apply global deduction ratio to charts
             const grossTotal = chartResult.byMonth.reduce((s, m) => s + m.revenue, 0);
             const deductionRatio = grossTotal > 0 ? totalDeductedRevenue / grossTotal : 1;
 
@@ -994,7 +942,6 @@ class revenueUploadController {
                 chartResult.byCountry.map(c => [c.country, Number((c.revenue * deductionRatio).toFixed(2))])
             );
 
-            // === Response ===
             res.json({
                 success: true,
                 data: {
@@ -1022,7 +969,7 @@ class revenueUploadController {
     async getAudioStreamingRevenueReports(req, res, next) {
         try {
             const {
-                labelId, platform, year, month, fromDate, toDate,
+                labelId, platform, fromDate, toDate,
                 releases, artist, track, territory,
                 page = 1, limit = 10
             } = req.query;
@@ -1039,22 +986,10 @@ class revenueUploadController {
             }
             if (labelId) filter.user_id = Number(labelId);
 
-            const defaultRetailers = ["Apple Music", "Spotify", "Gaana", "Jio Saavn", "Facebook", "Amazon", "TikTok"];
             if (platform && platform !== "") {
                 filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
-            } else {
-                filter.retailer = { $in: defaultRetailers };
             }
 
-            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-            if (year && !month && !fromDate && !toDate) {
-                filter.date = { $gte: `${selectedYear}-01-01`, $lte: `${selectedYear}-12-31` };
-            }
-            if (month) {
-                const start = new Date(selectedYear, parseInt(month) - 1, 1);
-                const end = new Date(selectedYear, parseInt(month), 0);
-                filter.date = { $gte: start.toISOString().split("T")[0], $lte: end.toISOString().split("T")[0] };
-            }
             if (fromDate && toDate) {
                 const [fy, fm] = fromDate.split("-").map(Number);
                 const [ty, tm] = toDate.split("-").map(Number);
@@ -1070,7 +1005,6 @@ class revenueUploadController {
 
             const hasGrouping = releases === "true" || artist === "true" || track === "true" || territory === "true";
 
-            // Flags for conditional field inclusion
             const includeTrack = track === "true";
             const includeRelease = releases === "true";
 
@@ -1114,12 +1048,9 @@ class revenueUploadController {
                     { $sort: { revenue: -1 } }
                 );
 
-                // Get total count
                 const countPipeline = [...pipeline, { $count: "total" }];
                 const countResult = await TblReport2025.aggregate(countPipeline).allowDiskUse(true);
                 totalRecords = countResult[0]?.total || 0;
-
-                // Add pagination
                 pipeline.push({ $skip: skipNum }, { $limit: limitNum });
 
                 const groupedData = await TblReport2025.aggregate(pipeline).allowDiskUse(true);
@@ -1133,7 +1064,6 @@ class revenueUploadController {
                         platform: item.samplePlatform || "Various"
                     };
 
-                    // Conditional logic: track > release priority
                     if (includeTrack) {
                         baseResponse.isrc_code = item._id.isrc_code || item.sampleISRC || "Unknown";
                     } else if (includeRelease) {
@@ -1157,7 +1087,6 @@ class revenueUploadController {
                 });
 
             } else {
-                // No grouping → individual rows
                 const countResult = await TblReport2025.countDocuments(filter);
                 totalRecords = countResult;
 
@@ -1205,8 +1134,6 @@ class revenueUploadController {
             } = req.query;
 
             const { role, userId } = req.user;
-
-            // === Build filter ===
             const filter = {};
 
             if (role && role !== "Super Admin" && role !== "Manager") {
@@ -1218,35 +1145,8 @@ class revenueUploadController {
 
             if (labelId) filter.user_id = Number(labelId);
 
-            const defaultRetailers = [
-                "SoundRecording",
-                "YouTubeArtTrack",
-                "YouTubePartnerChannel",
-                "YouTubeRDCChannel",
-                "YouTubeVideoClaim",
-                "YTPremiumRevenue"
-            ];
-
-            filter.retailer = platform
-                ? { $in: platform.split(",").map(p => p.trim()) }
-                : { $in: defaultRetailers };
-
-            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-
-            if (year && !month && !fromDate && !toDate) {
-                filter.date = {
-                    $gte: `${selectedYear}-01-01`,
-                    $lte: `${selectedYear}-12-31`
-                };
-            }
-
-            if (month) {
-                const start = new Date(selectedYear, month - 1, 1);
-                const end = new Date(selectedYear, month, 0);
-                filter.date = {
-                    $gte: start.toISOString().split("T")[0],
-                    $lte: end.toISOString().split("T")[0]
-                };
+            if (platform && platform !== "") {
+                filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
             }
 
             if (fromDate && toDate) {
@@ -1259,7 +1159,6 @@ class revenueUploadController {
             }
 
 
-            // === Step 1: Daily aggregation ===
             const dailyPipeline = [
                 { $match: filter },
                 {
@@ -1301,8 +1200,6 @@ class revenueUploadController {
             ];
 
             const dailyData = await YouTube.aggregate(dailyPipeline).allowDiskUse(true);
-
-            // === Step 2: Contracts & deductions ===
             const uniqueUserIds = [...new Set(dailyData.map(d => d.user_id).filter(Boolean))];
 
             const contracts = uniqueUserIds.length
@@ -1344,12 +1241,8 @@ class revenueUploadController {
                 totalStreams += item.dailyStreams;
             });
 
-            const avgDeductionPercentage =
-                entriesWithDeduction > 0
-                    ? sumDeductionPercent / entriesWithDeduction
-                    : 0;
+            const avgDeductionPercentage = entriesWithDeduction > 0 ? sumDeductionPercent / entriesWithDeduction : 0;
 
-            // === Step 3: Charts ===
             const chartPipeline = [
                 { $match: filter },
                 {
@@ -1468,7 +1361,7 @@ class revenueUploadController {
     async getYoutubeRevenueReports(req, res, next) {
         try {
             const {
-                labelId, platform, year, month, fromDate, toDate,
+                labelId, platform, fromDate, toDate,
                 releases, artist, track, territory,
                 page = 1, limit = 10
             } = req.query;
@@ -1486,36 +1379,8 @@ class revenueUploadController {
             }
             if (labelId) filter.user_id = Number(labelId);
 
-            // PLATFORM FILTER
-            const defaultRetailers = [
-                "SoundRecording",
-                "YouTubeArtTrack",
-                "YouTubePartnerChannel",
-                "YouTubeRDCChannel",
-                "YouTubeVideoClaim",
-                "YTPremiumRevenue"
-            ];
-
             if (platform && platform !== "") {
                 filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
-            } else {
-                filter.retailer = { $in: defaultRetailers };
-            }
-
-            // DATE FILTER (supports year, month, or custom range)
-            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-
-            if (year && !month && !fromDate && !toDate) {
-                filter.date = { $gte: `${selectedYear}-01-01`, $lte: `${selectedYear}-12-31` };
-            }
-
-            if (month) {
-                const start = new Date(selectedYear, parseInt(month) - 1, 1);
-                const end = new Date(selectedYear, parseInt(month), 0);
-                filter.date = {
-                    $gte: start.toISOString().split("T")[0],
-                    $lte: end.toISOString().split("T")[0]
-                };
             }
 
             if (fromDate && toDate) {
@@ -1532,8 +1397,6 @@ class revenueUploadController {
             const skipNum = (pageNum - 1) * limitNum;
 
             const hasGrouping = releases === "true" || artist === "true" || track === "true" || territory === "true";
-
-            // Flags for conditional field inclusion (same as audio version)
             const includeTrack = track === "true";
             const includeRelease = releases === "true";
 
@@ -1577,12 +1440,10 @@ class revenueUploadController {
                     { $sort: { revenue: -1 } }
                 );
 
-                // Get total count
                 const countPipeline = [...pipeline, { $count: "total" }];
                 const countResult = await YouTube.aggregate(countPipeline).allowDiskUse(true);
                 totalRecords = countResult[0]?.total || 0;
 
-                // Add pagination
                 pipeline.push({ $skip: skipNum }, { $limit: limitNum });
 
                 const groupedData = await YouTube.aggregate(pipeline).allowDiskUse(true);
@@ -1596,13 +1457,11 @@ class revenueUploadController {
                         platform: item.samplePlatform || "YouTube"
                     };
 
-                    // === SAME LOGIC AS AUDIO VERSION ===
                     if (includeTrack) {
                         baseResponse.isrc_code = item._id.isrc_code || item.sampleISRC || "Unknown";
                     } else if (includeRelease) {
                         baseResponse.release = item._id.release || item.sampleRelease || "Unknown Release";
                     }
-                    // ===================================
 
                     return baseResponse;
                 });
@@ -1621,7 +1480,6 @@ class revenueUploadController {
                 });
 
             } else {
-                // No grouping → individual rows
                 const countResult = await YouTube.countDocuments(filter);
                 totalRecords = countResult;
 
@@ -1679,7 +1537,6 @@ class revenueUploadController {
                 });
             }
 
-            // Create report with "pending" status
             const newReport = new AudioStreamingReportHistory({
                 user_id: userId,
                 filters: req.query,
@@ -1716,8 +1573,6 @@ class revenueUploadController {
                 role,
                 labelId,
                 platform,
-                year,
-                month,
                 fromDate,
                 toDate,
             } = filters;
@@ -1726,23 +1581,13 @@ class revenueUploadController {
 
             if (userId && role) {
                 if (role !== "Super Admin" && role !== "Manager") {
-                    // For non-Super Admin/Manager users, get child users
                     const users = await User.find({ parent_id: userId }, { id: 1 });
                     const childIds = users.map(u => u.id);
                     childIds.push(userId);
                     userFilter.user_id = { $in: childIds };
                 }
             }
-
-            const defaultRetailers = [
-                "Apple Music",
-                "Spotify",
-                "Gaana",
-                "Jio Saavn",
-                "Facebook",
-                "Amazon",
-                "TikTok"
-            ];
+            ;
 
             const filter = { ...userFilter };
 
@@ -1753,26 +1598,6 @@ class revenueUploadController {
             if (platform && platform !== "") {
                 const platforms = platform.split(",").map(p => p.trim());
                 filter.retailer = { $in: platforms };
-            } else {
-                filter.retailer = { $in: defaultRetailers };
-            }
-
-            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-
-            if (year && !month && !fromDate && !toDate) {
-                filter.date = {
-                    $gte: `${selectedYear}-01-01`,
-                    $lte: `${selectedYear}-12-31`
-                };
-            }
-
-            if (month && month !== '') {
-                const startDate = new Date(selectedYear, parseInt(month) - 1, 1);
-                const endDate = new Date(selectedYear, parseInt(month), 0);
-                filter.date = {
-                    $gte: startDate.toISOString().split("T")[0],
-                    $lte: endDate.toISOString().split("T")[0]
-                };
             }
 
             if (fromDate && toDate) {
@@ -1824,7 +1649,6 @@ class revenueUploadController {
             const relativePath = `uploads/reports/${filename}`;
             const fileURL = `${process.env.BASE_URL}/${relativePath}`;
 
-            // Create streaming workbook
             const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
                 filename: absoluteFilePath,
                 useStyles: true,
@@ -1884,7 +1708,6 @@ class revenueUploadController {
                     sno: ""
                 };
 
-                // Put message in first data column
                 const firstDataKey = headers[1]
                     .toLowerCase()
                     .replace(/\s+/g, "_");
@@ -1902,7 +1725,6 @@ class revenueUploadController {
 
 
             for await (const doc of cursor) {
-                // Determine headers from the very first document
                 if (!headersDetermined) {
                     Object.keys(doc).forEach(key => {
                         if (!excludeFields.includes(key) && key !== "date") {
@@ -1910,28 +1732,21 @@ class revenueUploadController {
                         }
                     });
                     headers.push("date");
-
-                    // Now create the first worksheet with proper headers
                     await createNewWorksheet();
                     headersDetermined = true;
                 }
 
-                // If current sheet is full, create a new one
                 if (rowCountInCurrentSheet >= MAX_ROWS_PER_SHEET) {
-
-                    // Add message before closing current sheet
                     addOverflowMessageRow(
                         currentWorksheet,
                         headers,
-                        sheetIndex   // next sheet number
+                        sheetIndex
                     );
 
-                    // Commit and create next sheet
                     await createNewWorksheet();
                 }
 
 
-                // Build row data object
                 const rowData = {
                     sno: totalRowsProcessed + 1
                 };
@@ -1944,7 +1759,6 @@ class revenueUploadController {
                 });
                 rowData.date = doc.date ?? "";
 
-                // Add row and commit it immediately (critical for streaming stability)
                 const row = currentWorksheet.addRow(rowData);
                 row.commit();
 
@@ -1956,12 +1770,10 @@ class revenueUploadController {
                 }
             }
 
-            // Commit the final worksheet
             if (currentWorksheet) {
                 currentWorksheet.commit();
             }
 
-            // Finalize the workbook
             await workbook.commit();
 
             cursor.close();
@@ -1969,7 +1781,6 @@ class revenueUploadController {
             console.log(`Excel report generated: ${absoluteFilePath}`);
             console.log(`Total rows: ${totalRowsProcessed} across ${sheetIndex - 1} sheet(s)`);
 
-            // Update history (single file)
             await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
                 status: 'ready',
                 filename,
@@ -2007,7 +1818,6 @@ class revenueUploadController {
                 });
             }
 
-            // Create report with "pending" status
             const newReport = new YoutubeReportHistory({
                 user_id: userId,
                 filters: req.query,
@@ -2044,8 +1854,6 @@ class revenueUploadController {
                 role,
                 labelId,
                 platform,
-                year,
-                month,
                 fromDate,
                 toDate,
             } = filters;
@@ -2054,22 +1862,12 @@ class revenueUploadController {
 
             if (userId && role) {
                 if (role !== "Super Admin" && role !== "Manager") {
-                    // For non-Super Admin/Manager users, get child users
                     const users = await User.find({ parent_id: userId }, { id: 1 });
                     const childIds = users.map(u => u.id);
                     childIds.push(userId);
                     userFilter.user_id = { $in: childIds };
                 }
             }
-
-            const defaultRetailers = [
-                "SoundRecording",
-                "YouTubeArtTrack",
-                "YouTubePartnerChannel",
-                "YouTubeRDCChannel",
-                "YouTubeVideoClaim",
-                "YTPremiumRevenue"
-            ];
 
             const filter = { ...userFilter };
 
@@ -2080,26 +1878,6 @@ class revenueUploadController {
             if (platform && platform !== "") {
                 const platforms = platform.split(",").map(p => p.trim());
                 filter.retailer = { $in: platforms };
-            } else {
-                filter.retailer = { $in: defaultRetailers };
-            }
-
-            const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-
-            if (year && !month && !fromDate && !toDate) {
-                filter.date = {
-                    $gte: `${selectedYear}-01-01`,
-                    $lte: `${selectedYear}-12-31`
-                };
-            }
-
-            if (month && month !== '') {
-                const startDate = new Date(selectedYear, parseInt(month) - 1, 1);
-                const endDate = new Date(selectedYear, parseInt(month), 0);
-                filter.date = {
-                    $gte: startDate.toISOString().split("T")[0],
-                    $lte: endDate.toISOString().split("T")[0]
-                };
             }
 
             if (fromDate && toDate) {
@@ -2152,7 +1930,6 @@ class revenueUploadController {
             const relativePath = `uploads/reports/${filename}`;
             const fileURL = `${process.env.BASE_URL}/${relativePath}`;
 
-            // Create streaming workbook
             const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
                 filename: absoluteFilePath,
                 useStyles: true,
@@ -2207,25 +1984,22 @@ class revenueUploadController {
             });
 
             for await (const doc of cursor) {
-                // Determine headers from the very first document
                 if (!headersDetermined) {
                     Object.keys(doc).forEach(key => {
                         if (!excludeFields.includes(key) && key !== "date") {
                             headers.push(key);
                         }
                     });
-                    headers.push("date"); // Date column at the end
+                    headers.push("date");
 
                     await createNewWorksheet();
                     headersDetermined = true;
                 }
 
-                // If current sheet is full, create a new one
                 if (rowCountInCurrentSheet >= MAX_ROWS_PER_SHEET) {
                     await createNewWorksheet();
                 }
 
-                // Build row data object
                 const rowData = {
                     sno: totalRowsProcessed + 1
                 };
@@ -2238,7 +2012,6 @@ class revenueUploadController {
                 });
                 rowData.date = doc.date ?? "";
 
-                // Add row and commit it immediately
                 const row = currentWorksheet.addRow(rowData);
                 row.commit();
 
@@ -2250,19 +2023,16 @@ class revenueUploadController {
                 }
             }
 
-            // Commit the final worksheet
             if (currentWorksheet) {
                 currentWorksheet.commit();
             }
 
-            // Finalize the workbook
             await workbook.commit();
             cursor.close();
 
             console.log(`YouTube Excel report generated: ${absoluteFilePath}`);
             console.log(`Total rows: ${totalRowsProcessed} across ${sheetIndex - 1} sheet(s)`);
 
-            // Update YoutubeReportHistory
             await YoutubeReportHistory.findByIdAndUpdate(reportId, {
                 status: 'ready',
                 filename,
@@ -2438,7 +2208,6 @@ class revenueUploadController {
                 });
             }
 
-            // Delete upload entry
             const revenueUploadResult = await RevenueUpload.findByIdAndDelete(userId);
 
             if (!revenueUploadResult) {
@@ -2448,7 +2217,6 @@ class revenueUploadController {
                 });
             }
 
-            // Delete revenue reports
             const tempReportResult = await TempReport.deleteMany({
                 uploadId: userId
             });
@@ -2525,7 +2293,6 @@ class revenueUploadController {
             let fileDeleted = false;
 
             if (report.filePath) {
-                // 🔑 FORCE src BASE
                 const absolutePath = path.resolve(
                     process.cwd(),
                     'src',
@@ -2610,7 +2377,6 @@ class revenueUploadController {
             let fileDeleted = false;
 
             if (report.filePath) {
-                // 🔑 FORCE src BASE
                 const absolutePath = path.resolve(
                     process.cwd(),
                     'src',
@@ -2900,7 +2666,6 @@ class revenueUploadController {
     //calculateRevenueSummary method
     async calculateRevenueSummary(userId) {
         try {
-            // Fetch the user's role to decide if we calculate global or per-user
             const user = await User.findOne({ id: userId }).select('role').lean();
             console.log("user", user);
 
@@ -2920,7 +2685,6 @@ class revenueUploadController {
                 $lte: endDate.toISOString().split("T")[0]
             };
 
-            // Build match stage — remove user_id filter if admin
             const matchStage = isAdmin
                 ? { date: dateFilter }
                 : { user_id: userId, date: dateFilter };
@@ -2929,7 +2693,6 @@ class revenueUploadController {
                 { $match: isAdmin ? {} : { user_id: userId } },
                 {
                     $addFields: {
-                        // Fix: Extract only numbers and decimal point, limit to 2 decimal places
                         revenueNum: {
                             $convert: {
                                 input: "$net_total",
@@ -2961,7 +2724,6 @@ class revenueUploadController {
 
             const dailyData = await TblReport2025.aggregate(dailyPipeline).allowDiskUse(true);
 
-            // Rest of the function remains the same...
             const uniqueUserIds = [...new Set(dailyData.map(d => d._id.user_id))];
 
             const contracts = uniqueUserIds.length
@@ -2999,7 +2761,6 @@ class revenueUploadController {
                 { $match: matchStage },
                 {
                     $addFields: {
-                        // Apply the same cleaning here
                         revenueNum: {
                             $cond: [
                                 { $in: [{ $type: "$net_total" }, ["double", "int", "long", "decimal"]] },
@@ -3075,7 +2836,6 @@ class revenueUploadController {
                 chartData.byCountry.map(c => [c._id || "Unknown", Number((c.revenue * ratio).toFixed(2))])
             );
 
-            // Decide where to save: per user or global
             const saveUserId = isAdmin ? 'global' : userId;
 
             await RevenueSummary.updateOne(
@@ -3091,7 +2851,6 @@ class revenueUploadController {
                 { upsert: true }
             );
 
-            // Only update User totals if it's a regular user (not admin/global)
             if (!isAdmin) {
                 await User.updateOne(
                     { id: userId },
@@ -3112,7 +2871,6 @@ class revenueUploadController {
     //calculateRevenueForSuperAdminandManager method
     async calculateRevenueForSuperAdminandManager() {
         try {
-            // Fetch all Super Admin and Manager users
             const admins = await User.find({ role: { $in: ['Super Admin', 'Manager'] } }).lean();
             if (!admins.length) {
                 console.log("No Super Admin or Manager found");
@@ -3131,7 +2889,6 @@ class revenueUploadController {
             const dailyPipeline = [
                 {
                     $addFields: {
-                        // Handle empty/null values properly
                         revenueNum: {
                             $convert: {
                                 input: "$net_total",
@@ -3198,7 +2955,6 @@ class revenueUploadController {
                 { $match: { date: dateFilter } },
                 {
                     $addFields: {
-                        // Apply the same cleaning here
                         revenueNum: {
                             $cond: [
                                 { $in: [{ $type: "$net_total" }, ["double", "int", "long", "decimal"]] },
@@ -3274,9 +3030,8 @@ class revenueUploadController {
                 chartData.byCountry.map(c => [c._id || "Unknown", Number((c.revenue * ratio).toFixed(2))])
             );
 
-            // Update for each Super Admin and Manager
             for (const admin of admins) {
-                const adminUserId = admin.id; // Assuming 'id' is the field for user_id
+                const adminUserId = admin.id;
 
                 await RevenueSummary.updateOne(
                     { user_id: adminUserId },
@@ -3380,7 +3135,6 @@ class revenueUploadController {
                 ? { date: dateFilter }
                 : { user_id: userId, date: dateFilter };
 
-            // Step 1: Daily aggregation using total_revenue (INR) and total_play
             const dailyPipeline = [
                 { $match: isAdmin ? { date: dateFilter } : { user_id: userId, date: dateFilter } },
                 {
@@ -3414,7 +3168,6 @@ class revenueUploadController {
 
             const dailyData = await YouTube.aggregate(dailyPipeline).allowDiskUse(true);
 
-            // Fetch contracts
             const uniqueUserIds = [...new Set(dailyData.map(d => d._id.user_id).filter(Boolean))];
 
             const contracts = uniqueUserIds.length
@@ -3427,7 +3180,6 @@ class revenueUploadController {
                 contractMap.get(c.user_id).push(c);
             });
 
-            // Apply label deduction
             let totalNetRevenue = 0;
             let totalStreams = 0;
 
@@ -3449,7 +3201,6 @@ class revenueUploadController {
             console.log("YouTube Total Net Revenue (INR):", totalNetRevenue);
             console.log("YouTube Total Streams:", totalStreams);
 
-            // Step 2: Chart data (gross INR revenue)
             const chartPipeline = [
                 { $match: matchStage },
                 {
@@ -3523,7 +3274,6 @@ class revenueUploadController {
                 chartData.byCountry.map(c => [c._id, Number((c.revenue * ratio).toFixed(2))])
             );
 
-            // Save to RevenueSummary
             const saveUserId = isAdmin ? 'global' : userId;
 
             await YoutubeRevenueSummary.updateOne(
@@ -3540,7 +3290,6 @@ class revenueUploadController {
                 { upsert: true }
             );
 
-            // Update user totals (only for non-admins)
             if (!isAdmin) {
                 await User.updateOne(
                     { id: userId },
@@ -3576,7 +3325,6 @@ class revenueUploadController {
                 $lte: endDate.toISOString().split("T")[0]
             };
 
-            // Daily aggregation (INR revenue)
             const dailyPipeline = [
                 { $match: { date: dateFilter } },
                 {
@@ -3643,7 +3391,6 @@ class revenueUploadController {
             console.log("All YouTube Total Net Revenue (INR):", totalNetRevenue);
             console.log("All YouTube Total Streams:", totalStreams);
 
-            // Chart pipeline
             const chartPipeline = [
                 { $match: { date: dateFilter } },
                 {
@@ -3717,7 +3464,6 @@ class revenueUploadController {
                 chartData.byCountry.map(c => [c._id, Number((c.revenue * ratio).toFixed(2))])
             );
 
-            // Update all admins/managers
             for (const admin of admins) {
                 await YoutubeRevenueSummary.updateOne(
                     { user_id: admin.id },
