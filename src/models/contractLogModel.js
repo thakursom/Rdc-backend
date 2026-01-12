@@ -28,6 +28,10 @@ const ContractLogSchema = new mongoose.Schema({
         type: String,
         default: null,
     },
+    updated_by: {
+        type: String,
+        required: true,
+    }
 },
     {
         timestamps: true,

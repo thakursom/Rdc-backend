@@ -29,6 +29,8 @@ class contractController {
                 labelPercentage
             } = req.body;
 
+            const { name } = req.user;
+
             if (!req.file) {
                 return res.status(400).json({
                     success: false,
@@ -62,6 +64,7 @@ class contractController {
                 },
                 message: `Contract "${contractName}" added.`,
                 ipAddress: req.ip,
+                updated_by: name
             });
 
             return res.status(201).json({
@@ -87,6 +90,8 @@ class contractController {
                 endDate,
                 labelPercentage
             } = req.body;
+
+            const { name } = req.user;
 
             if (!id) {
                 return res.status(400).json({
@@ -162,6 +167,7 @@ class contractController {
                 },
                 message: `Contract "${contractName}" updated.`,
                 ipAddress: req.ip,
+                updated_by: name
             });
 
             return res.status(200).json({
@@ -814,6 +820,7 @@ class contractController {
                         },
                         message: `Contract "${existingContract.contractName}" auto-renewed on ${today}`,
                         ipAddress: "system-cron",
+                        updated_by: "system-cron"
                     });
 
                     await Contract.findByIdAndUpdate(existingContract._id, {
