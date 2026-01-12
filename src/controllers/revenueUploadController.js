@@ -728,7 +728,7 @@ class revenueUploadController {
                 }
                 contractMap.get(c.user_id).push(c);
             });
-            
+
 
             // Sort contracts per user by startDate
             for (const [userId, userContracts] of contractMap.entries()) {
@@ -1183,8 +1183,18 @@ class revenueUploadController {
 
             if (labelId) filter.user_id = Number(labelId);
 
+            const defaultRetailers = [
+                "SoundRecording",
+                "YouTubeArtTrack",
+                "YouTubePartnerChannel",
+                "YouTubeRDCChannel",
+                "YouTubeVideoClaim",
+                "YTPremiumRevenue"
+            ];
             if (platform && platform !== "") {
                 filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
+            } else {
+                filter.retailer = { $in: defaultRetailers };
             }
 
             if (fromDate && toDate) {
