@@ -720,6 +720,24 @@ class revenueUploadController {
                 status: "active"
             }).lean();
 
+            const contractMap = new Map();
+
+            contracts.forEach(c => {
+                if (!contractMap.has(c.user_id)) {
+                    contractMap.set(c.user_id, []);
+                }
+                contractMap.get(c.user_id).push(c);
+            });
+            
+
+            // Sort contracts per user by startDate
+            for (const [userId, userContracts] of contractMap.entries()) {
+                userContracts.sort(
+                    (a, b) => new Date(a.startDate) - new Date(b.startDate)
+                );
+            }
+
+
             const toDate = (d) => {
                 if (!d) return null;
                 const parsed = new Date(d);
@@ -731,14 +749,20 @@ class revenueUploadController {
                 let percentage = 0;
 
                 if (rowDate && row.user_id) {
-                    const matchedContract = contracts.find(contract =>
-                        contract.user_id === row.user_id &&
-                        rowDate >= new Date(contract.startDate) &&
-                        rowDate <= new Date(contract.endDate)
-                    );
+                    const userContracts = contractMap.get(row.user_id) || [];
 
-                    if (matchedContract) {
-                        percentage = matchedContract.labelPercentage || 0;
+                    let applicableContract = null;
+
+                    for (const contract of userContracts) {
+                        if (rowDate >= new Date(contract.startDate)) {
+                            applicableContract = contract;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if (applicableContract) {
+                        percentage = applicableContract.labelPercentage || 0;
                     }
                 }
 
@@ -867,6 +891,13 @@ class revenueUploadController {
                 contractMap.get(c.user_id).push(c);
             });
 
+            for (const [userId, userContracts] of contractMap.entries()) {
+                userContracts.sort(
+                    (a, b) => new Date(a.startDate) - new Date(b.startDate)
+                );
+            }
+
+
             let totalDeductedRevenue = 0;
             let totalStreams = 0;
             let entriesWithDeduction = 0;
@@ -878,13 +909,20 @@ class revenueUploadController {
                 let applied = false;
 
                 const userContracts = contractMap.get(item.user_id) || [];
+                let applicableContract = null;
+
                 for (const contract of userContracts) {
-                    if (item.date >= contract.startDate && item.date <= contract.endDate) {
-                        percentage = contract.labelPercentage || 0;
-                        deducted = item.dailyRevenue * ((100 - percentage) / 100);
-                        applied = true;
+                    if (item.date >= contract.startDate) {
+                        applicableContract = contract;
+                    } else {
                         break;
                     }
+                }
+
+                if (applicableContract) {
+                    percentage = applicableContract.labelPercentage || 0;
+                    deducted = item.dailyRevenue * ((100 - percentage) / 100);
+                    applied = true;
                 }
 
                 if (applied) {
@@ -1130,7 +1168,7 @@ class revenueUploadController {
     async getYoutubeRevenueSummary(req, res, next) {
         try {
             const {
-                labelId, platform, year, month, fromDate, toDate
+                labelId, platform, fromDate, toDate
             } = req.query;
 
             const { role, userId } = req.user;
@@ -1212,6 +1250,12 @@ class revenueUploadController {
                 contractMap.get(c.user_id).push(c);
             });
 
+            for (const [userId, userContracts] of contractMap.entries()) {
+                userContracts.sort(
+                    (a, b) => new Date(a.startDate) - new Date(b.startDate)
+                );
+            }
+
             let totalDeductedRevenue = 0;
             let totalStreams = 0;
             let entriesWithDeduction = 0;
@@ -1223,13 +1267,20 @@ class revenueUploadController {
                 let applied = false;
 
                 const userContracts = contractMap.get(item.user_id) || [];
+                let applicableContract = null;
+
                 for (const contract of userContracts) {
-                    if (item.date >= contract.startDate && item.date <= contract.endDate) {
-                        percentage = contract.labelPercentage || 0;
-                        deducted = item.dailyRevenue * ((100 - percentage) / 100);
-                        applied = true;
+                    if (item.date >= contract.startDate) {
+                        applicableContract = contract;
+                    } else {
                         break;
                     }
+                }
+
+                if (applicableContract) {
+                    percentage = applicableContract.labelPercentage || 0;
+                    deducted = item.dailyRevenue * ((100 - percentage) / 100);
+                    applied = true;
                 }
 
                 if (applied) {
@@ -1379,8 +1430,18 @@ class revenueUploadController {
             }
             if (labelId) filter.user_id = Number(labelId);
 
+            const defaultRetailers = [
+                "SoundRecording",
+                "YouTubeArtTrack",
+                "YouTubePartnerChannel",
+                "YouTubeRDCChannel",
+                "YouTubeVideoClaim",
+                "YTPremiumRevenue"
+            ];
             if (platform && platform !== "") {
                 filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
+            } else {
+                filter.retailer = { $in: defaultRetailers };
             }
 
             if (fromDate && toDate) {
@@ -1875,9 +1936,18 @@ class revenueUploadController {
                 filter.user_id = Number(labelId);
             }
 
+            const defaultRetailers = [
+                "SoundRecording",
+                "YouTubeArtTrack",
+                "YouTubePartnerChannel",
+                "YouTubeRDCChannel",
+                "YouTubeVideoClaim",
+                "YTPremiumRevenue"
+            ];
             if (platform && platform !== "") {
-                const platforms = platform.split(",").map(p => p.trim());
-                filter.retailer = { $in: platforms };
+                filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
+            } else {
+                filter.retailer = { $in: defaultRetailers };
             }
 
             if (fromDate && toDate) {
@@ -2736,6 +2806,12 @@ class revenueUploadController {
                 contractMap.get(c.user_id).push(c);
             });
 
+            for (const [userId, userContracts] of contractMap.entries()) {
+                userContracts.sort(
+                    (a, b) => new Date(a.startDate) - new Date(b.startDate)
+                );
+            }
+
             let totalRevenue = 0;
             let totalStreams = 0;
 
@@ -2743,16 +2819,26 @@ class revenueUploadController {
                 let revenue = item.revenue;
 
                 const userContracts = contractMap.get(item._id.user_id) || [];
+
+                let applicableContract = null;
+
                 for (const c of userContracts) {
-                    if (item._id.date >= c.startDate && item._id.date <= c.endDate) {
-                        revenue *= (100 - (c.labelPercentage || 0)) / 100;
+                    if (item._id.date >= c.startDate) {
+                        applicableContract = c;
+                    } else {
                         break;
                     }
+                }
+
+                if (applicableContract) {
+                    const percentage = applicableContract.labelPercentage || 0;
+                    revenue *= (100 - percentage) / 100;
                 }
 
                 totalRevenue += revenue;
                 totalStreams += item.streams;
             });
+
 
             console.log("totalRevenue", totalRevenue);
             console.log("totalStreams", totalStreams);
@@ -2931,6 +3017,12 @@ class revenueUploadController {
                 contractMap.get(c.user_id).push(c);
             });
 
+            for (const [userId, userContracts] of contractMap.entries()) {
+                userContracts.sort(
+                    (a, b) => new Date(a.startDate) - new Date(b.startDate)
+                );
+            }
+
             let totalRevenue = 0;
             let totalStreams = 0;
 
@@ -2938,11 +3030,20 @@ class revenueUploadController {
                 let revenue = item.revenue;
 
                 const userContracts = contractMap.get(item._id.user_id) || [];
+
+                let applicableContract = null;
+
                 for (const c of userContracts) {
-                    if (item._id.date >= c.startDate && item._id.date <= c.endDate) {
-                        revenue *= (100 - (c.labelPercentage || 0)) / 100;
+                    if (item._id.date >= c.startDate) {
+                        applicableContract = c;
+                    } else {
                         break;
                     }
+                }
+
+                if (applicableContract) {
+                    const percentage = applicableContract.labelPercentage || 0;
+                    revenue *= (100 - percentage) / 100;
                 }
 
                 totalRevenue += revenue;
@@ -3180,22 +3281,37 @@ class revenueUploadController {
                 contractMap.get(c.user_id).push(c);
             });
 
+            for (const [userId, userContracts] of contractMap.entries()) {
+                userContracts.sort(
+                    (a, b) => new Date(a.startDate) - new Date(b.startDate)
+                );
+            }
+
             let totalNetRevenue = 0;
             let totalStreams = 0;
 
             dailyData.forEach(item => {
                 let revenue = item.revenue;
-                totalStreams += item.streams;
 
                 const userContracts = contractMap.get(item._id.user_id) || [];
-                for (const contract of userContracts) {
-                    if (item._id.date >= contract.startDate && item._id.date <= contract.endDate) {
-                        revenue *= (100 - (contract.labelPercentage || 0)) / 100;
+
+                let applicableContract = null;
+
+                for (const c of userContracts) {
+                    if (item._id.date >= c.startDate) {
+                        applicableContract = c;
+                    } else {
                         break;
                     }
                 }
 
+                if (applicableContract) {
+                    const percentage = applicableContract.labelPercentage || 0;
+                    revenue *= (100 - percentage) / 100;
+                }
+
                 totalNetRevenue += revenue;
+                totalStreams += item.streams;
             });
 
             console.log("YouTube Total Net Revenue (INR):", totalNetRevenue);
@@ -3370,22 +3486,37 @@ class revenueUploadController {
                 contractMap.get(c.user_id).push(c);
             });
 
+            for (const [userId, userContracts] of contractMap.entries()) {
+                userContracts.sort(
+                    (a, b) => new Date(a.startDate) - new Date(b.startDate)
+                );
+            }
+
             let totalNetRevenue = 0;
             let totalStreams = 0;
 
             dailyData.forEach(item => {
                 let revenue = item.revenue;
-                totalStreams += item.streams;
 
                 const userContracts = contractMap.get(item._id.user_id) || [];
-                for (const contract of userContracts) {
-                    if (item._id.date >= contract.startDate && item._id.date <= contract.endDate) {
-                        revenue *= (100 - (contract.labelPercentage || 0)) / 100;
+
+                let applicableContract = null;
+
+                for (const c of userContracts) {
+                    if (item._id.date >= c.startDate) {
+                        applicableContract = c;
+                    } else {
                         break;
                     }
                 }
 
+                if (applicableContract) {
+                    const percentage = applicableContract.labelPercentage || 0;
+                    revenue *= (100 - percentage) / 100;
+                }
+
                 totalNetRevenue += revenue;
+                totalStreams += item.streams;
             });
 
             console.log("All YouTube Total Net Revenue (INR):", totalNetRevenue);
