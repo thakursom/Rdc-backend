@@ -13,6 +13,7 @@ const revenueController = require("../controllers/revenueUploadController");
 const payoutController = require("../controllers/payoutController");
 const logController = require("../controllers/logController");
 const releaseController = require("../controllers/releaseController");
+const permissionController = require('../controllers/permissionController');
 
 
 
@@ -109,6 +110,14 @@ router.get("/releases", authMiddleware, releaseController.getAllReleases);
 
 router.post('/import-revenue-json', revenueController.importRevenueFromJson);
 router.post('/import-youtube-revenue-json', revenueController.importYoutubeRevenueFromJson);
+
+
+//Permissions Apis
+router.get('/sidebar-permissions', permissionController.getAllPermissions);
+router.get('/sidebar-permissions/:role', permissionController.getPermissionsByRole);
+router.put('/sidebar-permissions/:role', permissionController.updatePermissions);
+
+
 
 
 
