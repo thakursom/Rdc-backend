@@ -971,7 +971,7 @@ class revenueUploadController {
             const deductionRatio = grossTotal > 0 ? totalDeductedRevenue / grossTotal : 1;
 
             const revenueByMonth = Object.fromEntries(
-                chartResult.byMonth.map(m => [m.month, Number((m.revenue * deductionRatio).toFixed(2))])
+                chartResult.byMonth.filter(m => m.month).map(m => [m.month, Number((m.revenue * deductionRatio).toFixed(2))])
             );
             const revenueByChannel = Object.fromEntries(
                 chartResult.byPlatform.map(p => [p.platform, Number((p.revenue * deductionRatio).toFixed(2))])
@@ -1386,7 +1386,7 @@ class revenueUploadController {
             const deductionRatio = grossTotal > 0 ? totalDeductedRevenue / grossTotal : 1;
 
             const revenueByMonth = Object.fromEntries(
-                chartResult.byMonth.map(m => [m.month, +(m.revenue * deductionRatio).toFixed(2)])
+                chartResult.byMonth.filter(m => m.month).map(m => [m.month, +(m.revenue * deductionRatio).toFixed(2)])
             );
             const revenueByChannel = Object.fromEntries(
                 chartResult.byPlatform.map(p => [p.platform, +(p.revenue * deductionRatio).toFixed(2)])
