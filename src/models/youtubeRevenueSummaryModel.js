@@ -22,14 +22,18 @@ const YoutubeRevenueSummarySchema = new mongoose.Schema(
             of: Number,
             default: {}
         },
-        topTracks: {
+        topVideos: {
             type: [Object],
             default: []
         },
-        topPlatforms: {
-            type: Object,
-            default: {}
-        }
+        topAssets: {
+            type: [Object],
+            default: []
+        },
+        topChannels: {
+            type: [Object],
+            default: []
+        },
     },
     {
         timestamps: true,
