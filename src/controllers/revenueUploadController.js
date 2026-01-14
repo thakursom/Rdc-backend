@@ -940,7 +940,8 @@ class revenueUploadController {
                 { $match: filter },
                 {
                     $addFields: {
-                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } }
+                        revenueNum: { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } },
+                        streamsNum: { $convert: { input: "$track_count", to: "long", onError: 0, onNull: 0 } }
                     }
                 },
                 {
@@ -960,7 +961,98 @@ class revenueUploadController {
                             { $sort: { revenue: -1 } },
                             { $limit: 10 },
                             { $project: { country: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
+                        ],
+                        topTracks: [
+                            {
+                                $group: {
+                                    _id: {
+                                        isrc: { $ifNull: ["$isrc_code", "UNKNOWN"] },
+                                        title: {
+                                            $cond: [
+                                                { $ne: ["$track_title", null] },
+                                                "$track_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        },
+                                        retailer: { $ifNull: ["$retailer", "Unknown"] }
+                                    },
+                                    totalPlays: { $sum: "$streamsNum" },
+                                    totalRevenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { totalPlays: -1, totalRevenue: -1 } },
+                            { $limit: 10 },
+                            {
+                                $project: {
+                                    track: "$_id.title",
+                                    platform: "$_id.retailer",
+                                    isrc: "$_id.isrc",
+                                    totalPlays: 1,
+                                    revenue: { $round: ["$totalRevenue", 2] },
+                                    _id: 0
+                                }
+                            }
+                        ],
+                        topPlatforms: [
+                            {
+                                $addFields: {
+                                    revenueNum: { $toDouble: "$net_total" }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: {
+                                        platform: { $ifNull: ["$retailer", "Unknown"] },
+                                        track: {
+                                            $cond: [
+                                                { $ne: ["$track_title", null] },
+                                                "$track_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        }
+                                    },
+                                    revenue: { $sum: "$revenueNum" },
+                                    date: { $max: "$date" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            {
+                                $group: {
+                                    _id: "$_id.platform",
+                                    totalRevenue: { $sum: "$revenue" },
+                                    items: {
+                                        $push: {
+                                            track: "$_id.track",
+                                            revenue: { $round: ["$revenue", 2] },
+                                            date: "$date"
+                                        }
+                                    }
+                                }
+                            },
+                            { $sort: { totalRevenue: -1 } },
+                            { $limit: 5 },
+                            {
+                                $project: {
+                                    _id: 0,
+                                    k: "$_id",
+                                    v: { $slice: ["$items", 10] }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: null,
+                                    platforms: { $push: { k: "$k", v: "$v" } }
+                                }
+                            },
+                            {
+                                $replaceRoot: {
+                                    newRoot: {
+                                        $arrayToObject: { $ifNull: ["$platforms", []] }
+                                    }
+                                }
+                            }
                         ]
+
                     }
                 }
             ];
@@ -993,7 +1085,12 @@ class revenueUploadController {
                     },
                     revenueByMonth,
                     revenueByChannel,
-                    revenueByCountry
+                    revenueByCountry,
+                    topTracks: chartResult.topTracks || [],
+                    topPlatforms: Array.isArray(chartResult.topPlatforms)
+                        ? chartResult.topPlatforms[0] || {}
+                        : chartResult.topPlatforms || {}
+
                 }
             });
 
@@ -1212,20 +1309,10 @@ class revenueUploadController {
                 {
                     $addFields: {
                         revenueNum: {
-                            $convert: {
-                                input: "$total_revenue",
-                                to: "double",
-                                onError: 0,
-                                onNull: 0
-                            }
+                            $convert: { input: "$total_revenue", to: "double", onError: 0, onNull: 0 }
                         },
                         streamsNum: {
-                            $convert: {
-                                input: "$total_play",
-                                to: "long",
-                                onError: 0,
-                                onNull: 0
-                            }
+                            $convert: { input: "$total_play", to: "long", onError: 0, onNull: 0 }
                         }
                     }
                 },
@@ -1309,55 +1396,23 @@ class revenueUploadController {
                 {
                     $addFields: {
                         revenueNum: {
-                            $convert: {
-                                input: "$total_revenue",
-                                to: "double",
-                                onError: 0,
-                                onNull: 0
-                            }
+                            $convert: { input: "$total_revenue", to: "double", onError: 0, onNull: 0 }
+                        },
+                        streamsNum: {
+                            $convert: { input: "$total_play", to: "long", onError: 0, onNull: 0 }
                         }
                     }
                 },
                 {
                     $facet: {
                         byMonth: [
-                            {
-                                $group: {
-                                    _id: {
-                                        $dateToString: {
-                                            format: "%b %Y",
-                                            date: {
-                                                $dateFromString: { dateString: "$date" }
-                                            }
-                                        }
-                                    },
-                                    revenue: { $sum: "$revenueNum" }
-                                }
-                            },
+                            { $group: { _id: { $dateToString: { format: "%b %Y", date: { $dateFromString: { dateString: "$date" } } } }, revenue: { $sum: "$revenueNum" } } },
                             { $sort: { _id: 1 } },
-                            {
-                                $project: {
-                                    month: "$_id",
-                                    revenue: { $round: ["$revenue", 2] },
-                                    _id: 0
-                                }
-                            }
+                            { $project: { month: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
                         ],
-                        byPlatform: [
-                            {
-                                $group: {
-                                    _id: { $ifNull: ["$retailer", "Unknown"] },
-                                    revenue: { $sum: "$revenueNum" }
-                                }
-                            },
-                            { $sort: { revenue: -1 } },
-                            {
-                                $project: {
-                                    platform: "$_id",
-                                    revenue: { $round: ["$revenue", 2] },
-                                    _id: 0
-                                }
-                            }
+                        byPlatform: [{ $group: { _id: { $ifNull: ["$retailer", "Unknown"] }, revenue: { $sum: "$revenueNum" } } },
+                        { $sort: { revenue: -1 } },
+                        { $project: { platform: "$_id", revenue: { $round: ["$revenue", 2] }, _id: 0 } }
                         ],
                         byCountry: [
                             {
@@ -1373,6 +1428,98 @@ class revenueUploadController {
                                     country: "$_id",
                                     revenue: { $round: ["$revenue", 2] },
                                     _id: 0
+                                }
+                            }
+                        ],
+                        topTracks: [
+                            {
+                                $group: {
+                                    _id: {
+                                        isrc: { $ifNull: ["$isrc_code", "UNKNOWN"] },
+                                        title: {
+                                            $cond: [
+                                                { $ne: ["$asset_title", null] },
+                                                "$asset_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        },
+                                        retailer: { $ifNull: ["$retailer", "Unknown"] }
+                                    },
+                                    totalPlays: { $sum: "$streamsNum" },
+                                    totalRevenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { totalPlays: -1, totalRevenue: -1 } },
+                            { $limit: 10 },
+                            {
+                                $project: {
+                                    track: "$_id.title",
+                                    platform: "$_id.retailer",
+                                    isrc: "$_id.isrc",
+                                    totalPlays: 1,
+                                    revenue: { $round: ["$totalRevenue", 2] },
+                                    _id: 0
+                                }
+                            }
+                        ],
+                        topPlatforms: [
+                            {
+                                $addFields: {
+                                    revenueNum: {
+                                        $convert: { input: "$total_revenue", to: "double", onError: 0, onNull: 0 }
+                                    }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: {
+                                        platform: { $ifNull: ["$retailer", "Unknown"] },
+                                        track: {
+                                            $cond: [
+                                                { $ne: ["$asset_title", null] },
+                                                "$asset_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        }
+                                    },
+                                    revenue: { $sum: "$revenueNum" },
+                                    date: { $max: "$date" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            {
+                                $group: {
+                                    _id: "$_id.platform",
+                                    totalRevenue: { $sum: "$revenue" },
+                                    items: {
+                                        $push: {
+                                            track: "$_id.track",
+                                            revenue: { $round: ["$revenue", 2] },
+                                            date: "$date"
+                                        }
+                                    }
+                                }
+                            },
+                            { $sort: { totalRevenue: -1 } },
+                            { $limit: 5 },
+                            {
+                                $project: {
+                                    _id: 0,
+                                    k: "$_id",
+                                    v: { $slice: ["$items", 10] }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: null,
+                                    platforms: { $push: { k: "$k", v: "$v" } }
+                                }
+                            },
+                            {
+                                $replaceRoot: {
+                                    newRoot: {
+                                        $arrayToObject: { $ifNull: ["$platforms", []] }
+                                    }
                                 }
                             }
                         ]
@@ -1408,7 +1555,11 @@ class revenueUploadController {
                     },
                     revenueByMonth,
                     revenueByChannel,
-                    revenueByCountry
+                    revenueByCountry,
+                    topTracks: chartResult.topTracks || [],
+                    topPlatforms: Array.isArray(chartResult.topPlatforms)
+                        ? chartResult.topPlatforms[0] || {}
+                        : chartResult.topPlatforms || {}
                 }
             });
 
@@ -2869,6 +3020,14 @@ class revenueUploadController {
                                     ]
                                 }
                             ]
+                        },
+                        streamsNum: {
+                            $convert: {
+                                input: "$track_count",
+                                to: "long",
+                                onError: 0,
+                                onNull: 0
+                            }
                         }
 
                     }
@@ -2906,6 +3065,97 @@ class revenueUploadController {
                             },
                             { $sort: { revenue: -1 } },
                             { $limit: 10 }
+                        ],
+                        topTracks: [
+                            {
+                                $group: {
+                                    _id: {
+                                        isrc: { $ifNull: ["$isrc_code", "UNKNOWN"] },
+                                        title: {
+                                            $cond: [
+                                                { $ne: ["$track_title", null] },
+                                                "$track_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        },
+                                        retailer: { $ifNull: ["$retailer", "Unknown"] }
+                                    },
+                                    totalPlays: { $sum: "$streamsNum" },
+                                    totalRevenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { totalPlays: -1, totalRevenue: -1 } },
+                            { $limit: 10 },
+                            {
+                                $project: {
+                                    track: "$_id.title",
+                                    platform: "$_id.retailer",
+                                    isrc: "$_id.isrc",
+                                    totalPlays: 1,
+                                    revenue: { $round: ["$totalRevenue", 2] },
+                                    _id: 0
+                                }
+                            }
+                        ],
+
+                        topPlatforms: [
+                            {
+                                $addFields: {
+                                    revenueNum: { $toDouble: "$net_total" }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: {
+                                        platform: { $ifNull: ["$retailer", "Unknown"] },
+                                        track: {
+                                            $cond: [
+                                                { $ne: ["$track_title", null] },
+                                                "$track_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        }
+                                    },
+                                    revenue: { $sum: "$revenueNum" },
+                                    date: { $max: "$date" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            {
+                                $group: {
+                                    _id: "$_id.platform",
+                                    totalRevenue: { $sum: "$revenue" },
+                                    items: {
+                                        $push: {
+                                            track: "$_id.track",
+                                            revenue: { $round: ["$revenue", 2] },
+                                            date: "$date"
+                                        }
+                                    }
+                                }
+                            },
+                            { $sort: { totalRevenue: -1 } },
+                            { $limit: 5 },
+                            {
+                                $project: {
+                                    _id: 0,
+                                    k: "$_id",
+                                    v: { $slice: ["$items", 10] }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: null,
+                                    platforms: { $push: { k: "$k", v: "$v" } }
+                                }
+                            },
+                            {
+                                $replaceRoot: {
+                                    newRoot: {
+                                        $arrayToObject: { $ifNull: ["$platforms", []] }
+                                    }
+                                }
+                            }
                         ]
                     }
                 }
@@ -2932,6 +3182,11 @@ class revenueUploadController {
                 chartData.byCountry.map(c => [c._id || "Unknown", Number((c.revenue * ratio).toFixed(2))])
             );
 
+            const topTracks = chartData.topTracks || [];
+            const topPlatforms = Array.isArray(chartData.topPlatforms)
+                ? chartData.topPlatforms[0] || {}
+                : chartData.topPlatforms || {}
+
             const saveUserId = isAdmin ? 'global' : userId;
 
             await RevenueSummary.updateOne(
@@ -2940,7 +3195,9 @@ class revenueUploadController {
                     $set: {
                         netRevenueByMonth,
                         revenueByChannel,
-                        revenueByCountry
+                        revenueByCountry,
+                        topTracks,
+                        topPlatforms
                     },
                     $setOnInsert: { user_id: saveUserId }
                 },
@@ -3078,6 +3335,14 @@ class revenueUploadController {
                                     ]
                                 }
                             ]
+                        },
+                        streamsNum: {
+                            $convert: {
+                                input: "$track_count",
+                                to: "long",
+                                onError: 0,
+                                onNull: 0
+                            }
                         }
 
                     }
@@ -3115,6 +3380,97 @@ class revenueUploadController {
                             },
                             { $sort: { revenue: -1 } },
                             { $limit: 10 }
+                        ],
+                        topTracks: [
+                            {
+                                $group: {
+                                    _id: {
+                                        isrc: { $ifNull: ["$isrc_code", "UNKNOWN"] },
+                                        title: {
+                                            $cond: [
+                                                { $ne: ["$track_title", null] },
+                                                "$track_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        },
+                                        retailer: { $ifNull: ["$retailer", "Unknown"] }
+                                    },
+                                    totalPlays: { $sum: "$streamsNum" },
+                                    totalRevenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { totalPlays: -1, totalRevenue: -1 } },
+                            { $limit: 10 },
+                            {
+                                $project: {
+                                    track: "$_id.title",
+                                    platform: "$_id.retailer",
+                                    isrc: "$_id.isrc",
+                                    totalPlays: 1,
+                                    revenue: { $round: ["$totalRevenue", 2] },
+                                    _id: 0
+                                }
+                            }
+                        ],
+
+                        topPlatforms: [
+                            {
+                                $addFields: {
+                                    revenueNum: { $toDouble: "$net_total" }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: {
+                                        platform: { $ifNull: ["$retailer", "Unknown"] },
+                                        track: {
+                                            $cond: [
+                                                { $ne: ["$track_title", null] },
+                                                "$track_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        }
+                                    },
+                                    revenue: { $sum: "$revenueNum" },
+                                    date: { $max: "$date" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            {
+                                $group: {
+                                    _id: "$_id.platform",
+                                    totalRevenue: { $sum: "$revenue" },
+                                    items: {
+                                        $push: {
+                                            track: "$_id.track",
+                                            revenue: { $round: ["$revenue", 2] },
+                                            date: "$date"
+                                        }
+                                    }
+                                }
+                            },
+                            { $sort: { totalRevenue: -1 } },
+                            { $limit: 5 },
+                            {
+                                $project: {
+                                    _id: 0,
+                                    k: "$_id",
+                                    v: { $slice: ["$items", 10] }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: null,
+                                    platforms: { $push: { k: "$k", v: "$v" } }
+                                }
+                            },
+                            {
+                                $replaceRoot: {
+                                    newRoot: {
+                                        $arrayToObject: { $ifNull: ["$platforms", []] }
+                                    }
+                                }
+                            }
                         ]
                     }
                 }
@@ -3141,6 +3497,11 @@ class revenueUploadController {
                 chartData.byCountry.map(c => [c._id || "Unknown", Number((c.revenue * ratio).toFixed(2))])
             );
 
+            const topTracks = chartData.topTracks || [];
+            const topPlatforms = Array.isArray(chartData.topPlatforms)
+                ? chartData.topPlatforms[0] || {}
+                : chartData.topPlatforms || {}
+
             for (const admin of admins) {
                 const adminUserId = admin.id;
 
@@ -3150,7 +3511,9 @@ class revenueUploadController {
                         $set: {
                             netRevenueByMonth,
                             revenueByChannel,
-                            revenueByCountry
+                            revenueByCountry,
+                            topTracks,
+                            topPlatforms
                         },
                         $setOnInsert: { user_id: adminUserId }
                     },
@@ -3207,6 +3570,8 @@ class revenueUploadController {
                         netRevenueByMonth: "$revenueSummary.netRevenueByMonth",
                         revenueByChannel: "$revenueSummary.revenueByChannel",
                         revenueByCountry: "$revenueSummary.revenueByCountry",
+                        topTracks: "$revenueSummary.topTracks",
+                        topPlatforms: "$revenueSummary.topPlatforms",
                         updatedAt: "$revenueSummary.updatedAt"
                     }
                 }
@@ -3338,6 +3703,14 @@ class revenueUploadController {
                                 onError: 0,
                                 onNull: 0
                             }
+                        },
+                        streamsNum: {
+                            $convert: {
+                                input: "$total_play",
+                                to: "long",
+                                onError: 0,
+                                onNull: 0
+                            }
                         }
                     }
                 },
@@ -3374,6 +3747,98 @@ class revenueUploadController {
                             },
                             { $sort: { revenue: -1 } },
                             { $limit: 10 }
+                        ],
+                        topTracks: [
+                            {
+                                $group: {
+                                    _id: {
+                                        isrc: { $ifNull: ["$isrc_code", "UNKNOWN"] },
+                                        title: {
+                                            $cond: [
+                                                { $ne: ["$asset_title", null] },
+                                                "$asset_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        },
+                                        retailer: { $ifNull: ["$retailer", "Unknown"] }
+                                    },
+                                    totalPlays: { $sum: "$streamsNum" },
+                                    totalRevenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { totalPlays: -1, totalRevenue: -1 } },
+                            { $limit: 10 },
+                            {
+                                $project: {
+                                    track: "$_id.title",
+                                    platform: "$_id.retailer",
+                                    isrc: "$_id.isrc",
+                                    totalPlays: 1,
+                                    revenue: { $round: ["$totalRevenue", 2] },
+                                    _id: 0
+                                }
+                            }
+                        ],
+                        topPlatforms: [
+                            {
+                                $addFields: {
+                                    revenueNum: {
+                                        $convert: { input: "$total_revenue", to: "double", onError: 0, onNull: 0 }
+                                    }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: {
+                                        platform: { $ifNull: ["$retailer", "Unknown"] },
+                                        track: {
+                                            $cond: [
+                                                { $ne: ["$asset_title", null] },
+                                                "$asset_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        }
+                                    },
+                                    revenue: { $sum: "$revenueNum" },
+                                    date: { $max: "$date" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            {
+                                $group: {
+                                    _id: "$_id.platform",
+                                    totalRevenue: { $sum: "$revenue" },
+                                    items: {
+                                        $push: {
+                                            track: "$_id.track",
+                                            revenue: { $round: ["$revenue", 2] },
+                                            date: "$date"
+                                        }
+                                    }
+                                }
+                            },
+                            { $sort: { totalRevenue: -1 } },
+                            { $limit: 5 },
+                            {
+                                $project: {
+                                    _id: 0,
+                                    k: "$_id",
+                                    v: { $slice: ["$items", 10] }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: null,
+                                    platforms: { $push: { k: "$k", v: "$v" } }
+                                }
+                            },
+                            {
+                                $replaceRoot: {
+                                    newRoot: {
+                                        $arrayToObject: { $ifNull: ["$platforms", []] }
+                                    }
+                                }
+                            }
                         ]
                     }
                 }
@@ -3400,6 +3865,11 @@ class revenueUploadController {
                 chartData.byCountry.map(c => [c._id, Number((c.revenue * ratio).toFixed(2))])
             );
 
+            const topTracks = chartData.topTracks || [];
+            const topPlatforms = Array.isArray(chartData.topPlatforms)
+                ? chartData.topPlatforms[0] || {}
+                : chartData.topPlatforms || {}
+
             const saveUserId = isAdmin ? 'global' : userId;
 
             await YoutubeRevenueSummary.updateOne(
@@ -3409,7 +3879,8 @@ class revenueUploadController {
                         netRevenueByMonth,
                         revenueByChannel,
                         revenueByCountry,
-                        updatedAt: new Date()
+                        topTracks,
+                        topPlatforms
                     },
                     $setOnInsert: { user_id: saveUserId }
                 },
@@ -3543,6 +4014,14 @@ class revenueUploadController {
                                 onError: 0,
                                 onNull: 0
                             }
+                        },
+                        streamsNum: {
+                            $convert: {
+                                input: "$total_play",
+                                to: "long",
+                                onError: 0,
+                                onNull: 0
+                            }
                         }
                     }
                 },
@@ -3579,6 +4058,98 @@ class revenueUploadController {
                             },
                             { $sort: { revenue: -1 } },
                             { $limit: 10 }
+                        ],
+                        topTracks: [
+                            {
+                                $group: {
+                                    _id: {
+                                        isrc: { $ifNull: ["$isrc_code", "UNKNOWN"] },
+                                        title: {
+                                            $cond: [
+                                                { $ne: ["$asset_title", null] },
+                                                "$asset_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        },
+                                        retailer: { $ifNull: ["$retailer", "Unknown"] }
+                                    },
+                                    totalPlays: { $sum: "$streamsNum" },
+                                    totalRevenue: { $sum: "$revenueNum" }
+                                }
+                            },
+                            { $sort: { totalPlays: -1, totalRevenue: -1 } },
+                            { $limit: 10 },
+                            {
+                                $project: {
+                                    track: "$_id.title",
+                                    platform: "$_id.retailer",
+                                    isrc: "$_id.isrc",
+                                    totalPlays: 1,
+                                    revenue: { $round: ["$totalRevenue", 2] },
+                                    _id: 0
+                                }
+                            }
+                        ],
+                        topPlatforms: [
+                            {
+                                $addFields: {
+                                    revenueNum: {
+                                        $convert: { input: "$total_revenue", to: "double", onError: 0, onNull: 0 }
+                                    }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: {
+                                        platform: { $ifNull: ["$retailer", "Unknown"] },
+                                        track: {
+                                            $cond: [
+                                                { $ne: ["$asset_title", null] },
+                                                "$asset_title",
+                                                { $ifNull: ["$release", "Unknown Track"] }
+                                            ]
+                                        }
+                                    },
+                                    revenue: { $sum: "$revenueNum" },
+                                    date: { $max: "$date" }
+                                }
+                            },
+                            { $sort: { revenue: -1 } },
+                            {
+                                $group: {
+                                    _id: "$_id.platform",
+                                    totalRevenue: { $sum: "$revenue" },
+                                    items: {
+                                        $push: {
+                                            track: "$_id.track",
+                                            revenue: { $round: ["$revenue", 2] },
+                                            date: "$date"
+                                        }
+                                    }
+                                }
+                            },
+                            { $sort: { totalRevenue: -1 } },
+                            { $limit: 5 },
+                            {
+                                $project: {
+                                    _id: 0,
+                                    k: "$_id",
+                                    v: { $slice: ["$items", 10] }
+                                }
+                            },
+                            {
+                                $group: {
+                                    _id: null,
+                                    platforms: { $push: { k: "$k", v: "$v" } }
+                                }
+                            },
+                            {
+                                $replaceRoot: {
+                                    newRoot: {
+                                        $arrayToObject: { $ifNull: ["$platforms", []] }
+                                    }
+                                }
+                            }
                         ]
                     }
                 }
@@ -3605,6 +4176,11 @@ class revenueUploadController {
                 chartData.byCountry.map(c => [c._id, Number((c.revenue * ratio).toFixed(2))])
             );
 
+            const topTracks = chartData.topTracks || [];
+            const topPlatforms = Array.isArray(chartData.topPlatforms)
+                ? chartData.topPlatforms[0] || {}
+                : chartData.topPlatforms || {}
+
             for (const admin of admins) {
                 await YoutubeRevenueSummary.updateOne(
                     { user_id: admin.id },
@@ -3613,7 +4189,8 @@ class revenueUploadController {
                             netRevenueByMonth,
                             revenueByChannel,
                             revenueByCountry,
-                            updatedAt: new Date()
+                            topTracks,
+                            topPlatforms
                         },
                         $setOnInsert: { user_id: admin.id }
                     },
@@ -3670,6 +4247,8 @@ class revenueUploadController {
                         netRevenueByMonth: "$revenueSummary.netRevenueByMonth",
                         revenueByChannel: "$revenueSummary.revenueByChannel",
                         revenueByCountry: "$revenueSummary.revenueByCountry",
+                        topTracks: "$revenueSummary.topTracks",
+                        topPlatforms: "$revenueSummary.topPlatforms",
                         updatedAt: "$revenueSummary.updatedAt"
                     }
                 }

@@ -21,6 +21,14 @@ const RevenueSummarySchema = new mongoose.Schema(
       type: Map,
       of: Number,
       default: {}
+    },
+    topTracks: {
+      type: [Object],
+      default: []
+    },
+    topPlatforms: {
+      type: Object,
+      default: {}
     }
   },
   {
