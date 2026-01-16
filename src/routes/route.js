@@ -120,15 +120,15 @@ router.put('/sidebar-permissions/:role', permissionController.updatePermissions)
 
 
 //Dashboard Apis
-// router.get('/total-revenue', authMiddleware, DashboardController.getRevenueDashboard);
-// router.get('/revenue-by-month', authMiddleware, DashboardController.getMonthlyRevenue);
-// router.get('/platform-share', authMiddleware, DashboardController.getPlatformShare);
-// router.get('/revenue-by-month-stacked', authMiddleware, DashboardController.getRevenueByMonthStacked);
-// router.get('/territory-revenue', authMiddleware, DashboardController.getTerritoryRevenue);
-// router.get('/yearly-streams', authMiddleware, DashboardController.getYearlyStreams);
-// router.get('/weekly-streams', authMiddleware, DashboardController.getWeeklyStreams);
-// router.get('/music-stream-comparison', authMiddleware, DashboardController.getMusicStreamComparison);
-// router.get('/streaming-trends-over-time', authMiddleware, DashboardController.getStreamingTrendsOverTime);
+router.get('/total-revenue', authMiddleware, DashboardController.getRevenueDashboard);
+router.get('/revenue-by-month', authMiddleware, DashboardController.getMonthlyRevenue);
+router.get('/platform-share', authMiddleware, DashboardController.getPlatformShare);
+router.get('/revenue-by-month-stacked', authMiddleware, DashboardController.getRevenueByMonthStacked);
+router.get('/territory-revenue', authMiddleware, DashboardController.getTerritoryRevenue);
+router.get('/yearly-streams', authMiddleware, DashboardController.getYearlyStreams);
+router.get('/weekly-streams', authMiddleware, DashboardController.getWeeklyStreams);
+router.get('/music-stream-comparison', authMiddleware, DashboardController.getMusicStreamComparison);
+router.get('/streaming-trends-over-time', authMiddleware, DashboardController.getStreamingTrendsOverTime);
 router.get('/audio-streaming-Dashboard', authMiddleware, DashboardController.getAudioStreamingDashboard);
 
 
