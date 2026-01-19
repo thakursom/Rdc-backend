@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-const dashboardSnapshotSchema = new mongoose.Schema({
+const youtubeDashboardSnapshotSchema = new mongoose.Schema({
     user_id: {
         type: Number,
         ref: "User",
@@ -47,6 +47,6 @@ const dashboardSnapshotSchema = new mongoose.Schema({
     versionKey: false
 });
 
-dashboardSnapshotSchema.index({ user_id: 1, type: 1 });
+youtubeDashboardSnapshotSchema.index({ user_id: 1, type: 1 });
 
-module.exports = mongoose.model('DashboardSnapshot', dashboardSnapshotSchema);
+module.exports = mongoose.model('YoutubeDashboardSnapshot', youtubeDashboardSnapshotSchema);
