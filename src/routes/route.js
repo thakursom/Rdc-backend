@@ -129,7 +129,8 @@ router.get('/yearly-streams', authMiddleware, DashboardController.getYearlyStrea
 router.get('/weekly-streams', authMiddleware, DashboardController.getWeeklyStreams);
 router.get('/music-stream-comparison', authMiddleware, DashboardController.getMusicStreamComparison);
 router.get('/streaming-trends-over-time', authMiddleware, DashboardController.getStreamingTrendsOverTime);
-router.get('/audio-streaming-Dashboard', authMiddleware, DashboardController.getAudioStreamingDashboard);
+router.get('/audio-streaming-dashboard', authMiddleware, DashboardController.getAudioStreamingDashboard);
+router.get('/youtube-dashboard', authMiddleware, DashboardController.getYoutubeDashboard);
 
 
 

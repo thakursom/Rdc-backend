@@ -1,3 +1,4 @@
+const YoutubeDashboardSnapshot = require('../models/youtubeDashboardSnapshotModel');
 const DashboardSnapshot = require('../models/dashboardSnapshotModel');
 const TblReport2025 = require('../models/tblReport2025Model');
 const User = require('../models/userModel');
@@ -709,6 +710,7 @@ class DashboardController {
         }
     }
 
+    //getAudioStreamingDashboard method
     async getAudioStreamingDashboard(req, res) {
         try {
             const { userId } = req.user;
@@ -732,6 +734,74 @@ class DashboardController {
             }
 
             const snapshot = await DashboardSnapshot.findOne({ user_id: userId })
+                .select('-_id -createdAt -updatedAt')
+                .lean();
+
+            if (!snapshot) {
+                return res.status(200).json({
+                    success: true,
+                    data: {
+                        overview: {},
+                        monthlyRevenue: [],
+                        platformShare: [],
+                        revenueByMonthPlatform: [],
+                        territoryRevenue: [],
+                        yearlyStreams: [],
+                        weeklyStreams: [],
+                        musicStreamComparison: [],
+                        streamingTrends: []
+                    }
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    overview: snapshot.overview ?? {},
+                    monthlyRevenue: snapshot.monthlyRevenue ?? [],
+                    platformShare: snapshot.platformShare ?? [],
+                    revenueByMonthPlatform: snapshot.revenueByMonthPlatform ?? [],
+                    territoryRevenue: snapshot.territoryRevenue ?? [],
+                    yearlyStreams: snapshot.yearlyStreams ?? [],
+                    weeklyStreams: snapshot.weeklyStreams ?? [],
+                    musicStreamComparison: snapshot.musicStreamComparison ?? [],
+                    streamingTrends: snapshot.streamingTrends ?? []
+                }
+            });
+
+        } catch (error) {
+            console.error("getAudioStreamingDashboard error:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error"
+            });
+        }
+    }
+
+    //getYoutubeDashboard method
+    async getYoutubeDashboard(req, res) {
+        try {
+            const { userId } = req.user;
+
+            if (!userId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "User ID missing"
+                });
+            }
+
+            const user = await User.findOne({ id: userId })
+                .select('id role')
+                .lean();
+
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    message: "User not found"
+                });
+            }
+
+            const snapshot = await YoutubeDashboardSnapshot.findOne({ user_id: userId })
                 .select('-_id -createdAt -updatedAt')
                 .lean();
 

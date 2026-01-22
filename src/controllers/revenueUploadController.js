@@ -21,6 +21,7 @@ const TempYoutube = require("../models/tempYoutubeModel");
 const RevenueSummary = require("../models/revenueSummaryModel");
 const YoutubeRevenueSummary = require("../models/youtubeRevenueSummaryModel");
 const DashboardService = require('../services/dashboardService');
+const YoutubeDashboardService = require('../services/youtubeDashboardService');
 
 const monthMap = {
     Jan: '01', Feb: '02', Mar: '03', Apr: '04',
@@ -782,10 +783,21 @@ class revenueUploadController {
             )];
 
             if (isYouTube) {
+                console.log("Youtube");
+
                 for (const id of affectedUserIds) {
                     await this.calculateYoutubeRevenueSummary(id);
+                    try {
+                        const user = await User.findOne({ id: id }).select('role').lean();
+                        if (user?.role) {
+                            await YoutubeDashboardService.calculateAndSaveYoutubeDashboard(id, user.role);
+                        }
+                    } catch (e) {
+                        console.error(`Failed to refresh dashboard for user ${id}:`, e);
+                    }
                 }
                 await this.calculateYoutubeRevenueForSuperAdminandManager();
+                await YoutubeDashboardService.refreshAllAdminAndManagerYoutubeDashboards();
             } else {
                 for (const id of affectedUserIds) {
                     await this.calculateRevenueSummary(id);
@@ -795,7 +807,7 @@ class revenueUploadController {
                             await DashboardService.calculateAndSaveDashboard(id, user.role);
                         }
                     } catch (e) {
-                        console.error(`Failed to refresh dashboard for user ${userId}:`, e);
+                        console.error(`Failed to refresh dashboard for user ${id}:`, e);
                     }
                 }
                 await this.calculateRevenueForSuperAdminandManager();

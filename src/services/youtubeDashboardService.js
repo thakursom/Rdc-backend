@@ -1,11 +1,14 @@
-const Youtube = require('../models/youtubeModel');
 const YoutubeDashboardSnapshot = require('../models/youtubeDashboardSnapshotModel');
+const Youtube = require('../models/youtubeModel');
 const User = require('../models/userModel');
 
 
 class YoutubeDashboardService {
 
-    static async refreshAllAdminAndManagerDashboards() {
+    constructor() { console.log("youtube service"); }
+
+
+    static async refreshAllAdminAndManagerYoutubeDashboards() {
         try {
             const admins = await User.find({ role: { $in: ['Super Admin', 'Manager'] } }).lean();
 
@@ -14,7 +17,7 @@ class YoutubeDashboardService {
             for (const admin of admins) {
 
                 try {
-                    await this.calculateAndSaveDashboard(admin.id, admin.role);
+                    await this.calculateAndSaveYoutubeDashboard(admin.id, admin.role);
                 } catch (err) {
                     console.error(`Failed to refresh ${admin.role} ${admin.id}:`, err);
                 }
@@ -28,7 +31,7 @@ class YoutubeDashboardService {
         }
     }
 
-    static async calculateAndSaveDashboard(userId, role) {
+    static async calculateAndSaveYoutubeDashboard(userId, role) {
         try {
             let matchStage;
             let snapshotType;
@@ -62,15 +65,15 @@ class YoutubeDashboardService {
                 musicStreamComparison,
                 streamingTrends
             ] = await Promise.all([
-                this.calculateOverview(matchStage),
-                this.calculateMonthlyRevenue(matchStage),
-                this.calculatePlatformShare(matchStage),
-                this.calculateRevenueByMonthStacked(matchStage),
-                this.calculateTerritoryRevenue(matchStage),
-                this.calculateYearlyStreams(matchStage),
-                this.calculateWeeklyStreams(matchStage),
-                this.calculateMusicStreamComparison(matchStage),
-                this.calculateStreamingTrendsOverTime(matchStage)
+                this.calculateYoutubeOverview(matchStage),
+                this.calculateYoutubeMonthlyRevenue(matchStage),
+                this.calculateYoutubePlatformShare(matchStage),
+                this.calculateYoutubeRevenueByMonthStacked(matchStage),
+                this.calculateYoutubeTerritoryRevenue(matchStage),
+                this.calculateYoutubeYearlyStreams(matchStage),
+                this.calculateYoutubeWeeklyStreams(matchStage),
+                this.calculateYoutubeMusicStreamComparison(matchStage),
+                this.calculateYoutubeStreamingTrendsOverTime(matchStage)
             ]);
 
             const snapshotData = {
@@ -102,7 +105,7 @@ class YoutubeDashboardService {
         }
     }
 
-    static async calculateOverview(match) {
+    static async calculateYoutubeOverview(match) {
         const [result] = await Youtube.aggregate([
             { $match: match },
             {
@@ -166,7 +169,7 @@ class YoutubeDashboardService {
         };
     }
 
-    static async calculateMonthlyRevenue(match) {
+    static async calculateYoutubeMonthlyRevenue(match) {
         const today = new Date();
         const months = [];
         for (let i = 0; i < 12; i++) {
@@ -178,17 +181,17 @@ class YoutubeDashboardService {
         const agg = await Youtube.aggregate([
             { $match: match },
             { $addFields: { m: { $substr: ["$date", 0, 7] } } },
-            { $group: { _id: "$m", revenue: { $sum: { $toDouble: "$net_total" } } } }
+            { $group: { _id: "$m", revenue: { $sum: { $toDouble: "$total_revenue" } } } }
         ]);
 
         const map = new Map(agg.map(x => [x._id, x.revenue]));
         return months.map(m => ({ month: m, revenue: map.get(m) ?? 0 }));
     }
 
-    static async calculatePlatformShare(match) {
+    static async calculateYoutubePlatformShare(match) {
         const agg = await Youtube.aggregate([
             { $match: match },
-            { $group: { _id: "$retailer", v: { $sum: { $toDouble: "$net_total" } } } },
+            { $group: { _id: "$retailer", v: { $sum: { $toDouble: "$total_revenue" } } } },
             { $sort: { v: -1 } }
         ]);
 
@@ -198,7 +201,7 @@ class YoutubeDashboardService {
         }));
     }
 
-    static async calculateRevenueByMonthStacked(match) {
+    static async calculateYoutubeRevenueByMonthStacked(match) {
         const today = new Date();
         const startDate = new Date(today);
         startDate.setMonth(today.getMonth() - 11);
@@ -223,7 +226,7 @@ class YoutubeDashboardService {
             {
                 $group: {
                     _id: { month: "$month", retailer: "$retailer" },
-                    revenue: { $sum: { $toDouble: "$net_total" } }
+                    revenue: { $sum: { $toDouble: "$total_revenue" } }
                 }
             },
             {
@@ -242,18 +245,18 @@ class YoutubeDashboardService {
         }));
     }
 
-    static async calculateTerritoryRevenue(match) {
+    static async calculateYoutubeTerritoryRevenue(match) {
         const result = await Youtube.aggregate([
             { $match: match },
-            { $group: { _id: "$territory", revenue: { $sum: { $toDouble: "$net_total" } } } },
-            { $project: { _id: 0, territory: "$_id", value: { $round: ["$revenue", 2] } } },
+            { $group: { _id: "$country", revenue: { $sum: { $toDouble: "$total_revenue" } } } },
+            { $project: { _id: 0, country: "$_id", value: { $round: ["$revenue", 2] } } },
             { $sort: { value: -1 } }
         ]);
 
         return result;
     }
 
-    static async calculateYearlyStreams(match) {
+    static async calculateYoutubeYearlyStreams(match) {
         const result = await Youtube.aggregate([
             { $match: match },
             { $addFields: { year: { $substr: ["$date", 0, 4] } } },
@@ -261,7 +264,7 @@ class YoutubeDashboardService {
                 $group: {
                     _id: "$year",
                     streams: { $sum: 1 },
-                    revenue: { $sum: { $toDouble: "$net_total" } },
+                    revenue: { $sum: { $toDouble: "$total_revenue" } },
                     trackCount: { $sum: 1 }
                 }
             },
@@ -296,7 +299,7 @@ class YoutubeDashboardService {
         return { data: result, summary: growthInfo };
     }
 
-    static async calculateWeeklyStreams(match) {
+    static async calculateYoutubeWeeklyStreams(match) {
         const today = new Date();
         const dayOfWeek = today.getDay();
         const startOfWeek = new Date(today);
@@ -352,7 +355,7 @@ class YoutubeDashboardService {
         };
     }
 
-    static async calculateMusicStreamComparison(match) {
+    static async calculateYoutubeMusicStreamComparison(match) {
         const today = new Date();
         const currentYear = today.getFullYear().toString();
         const prevYear = (today.getFullYear() - 1).toString();
@@ -402,7 +405,7 @@ class YoutubeDashboardService {
         };
     }
 
-    static async calculateStreamingTrendsOverTime(match) {
+    static async calculateYoutubeStreamingTrendsOverTime(match) {
         const today = new Date();
         const startDate = new Date(today);
         startDate.setMonth(today.getMonth() - 11);
