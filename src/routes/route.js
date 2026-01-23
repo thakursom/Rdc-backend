@@ -120,17 +120,10 @@ router.put('/sidebar-permissions/:role', permissionController.updatePermissions)
 
 
 //Dashboard Apis
-router.get('/total-revenue', authMiddleware, DashboardController.getRevenueDashboard);
-router.get('/revenue-by-month', authMiddleware, DashboardController.getMonthlyRevenue);
-router.get('/platform-share', authMiddleware, DashboardController.getPlatformShare);
-router.get('/revenue-by-month-stacked', authMiddleware, DashboardController.getRevenueByMonthStacked);
-router.get('/territory-revenue', authMiddleware, DashboardController.getTerritoryRevenue);
-router.get('/yearly-streams', authMiddleware, DashboardController.getYearlyStreams);
-router.get('/weekly-streams', authMiddleware, DashboardController.getWeeklyStreams);
-router.get('/music-stream-comparison', authMiddleware, DashboardController.getMusicStreamComparison);
-router.get('/streaming-trends-over-time', authMiddleware, DashboardController.getStreamingTrendsOverTime);
 router.get('/audio-streaming-dashboard', authMiddleware, DashboardController.getAudioStreamingDashboard);
 router.get('/youtube-dashboard', authMiddleware, DashboardController.getYoutubeDashboard);
+router.get('/audio-streaming-filter-dashboard', authMiddleware, DashboardController.getUnifiedAudioStreamingDashboard);
+router.get('/youtube-filter-dashboard', authMiddleware, DashboardController.getUnifiedYoutubeDashboard);
 
 
 
