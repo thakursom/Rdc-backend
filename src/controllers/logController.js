@@ -17,7 +17,7 @@ class LogController {
             if (role !== "Super Admin" && role !== "Manager") {
                 const users = await User.find({ parent_id: userId }, { id: 1 });
                 const childIds = users.map(u => u.id);
-                // childIds.push(userId);
+                childIds.push(userId);
                 filter.user_id = { $in: childIds };
             }
 
@@ -32,9 +32,8 @@ class LogController {
 
             const skip = (page - 1) * limit;
 
-            // Fetch logss
             const logs = await Log.find(filter)
-                .sort({ createdAt: -1 }) // latest first
+                .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit);
 
