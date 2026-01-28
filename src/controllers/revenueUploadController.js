@@ -903,8 +903,29 @@ class revenueUploadController {
             const dailyData = await TblReport2025.aggregate(dailyPipeline).allowDiskUse(true);
 
             const uniqueUserIds = [...new Set(dailyData.map(d => d.user_id).filter(Boolean))];
-            const contracts = uniqueUserIds.length > 0
-                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+            const users = uniqueUserIds.length
+                ? await User.find(
+                    { id: { $in: uniqueUserIds } },
+                    { id: 1, parent_id: 1 }
+                ).lean()
+                : [];
+
+            const parentMap = new Map();
+            users.forEach(u => {
+                parentMap.set(u.id, u.parent_id || null);
+            });
+
+
+            const allUserIds = new Set(uniqueUserIds);
+            users.forEach(u => {
+                if (u.parent_id) allUserIds.add(u.parent_id);
+            });
+
+            const contracts = allUserIds.size
+                ? await Contract.find({
+                    user_id: { $in: [...allUserIds] },
+                    status: "active"
+                }).lean()
                 : [];
 
             const contractMap = new Map();
@@ -930,21 +951,33 @@ class revenueUploadController {
                 let percentage = 0;
                 let applied = false;
 
-                const userContracts = contractMap.get(item.user_id) || [];
-                let applicableContract = null;
+                const getApplicableContract = (uid) => {
+                    const list = contractMap.get(uid) || [];
+                    let found = null;
 
-                for (const contract of userContracts) {
-                    if (item.date >= contract.startDate) {
-                        applicableContract = contract;
-                    } else {
-                        break;
+                    for (const c of list) {
+                        if (item.date >= c.startDate) found = c;
+                        else break;
                     }
+                    return found;
+                };
+
+                const subLabelId = item.user_id;
+                const labelId = parentMap.get(subLabelId);
+
+                const labelContract = labelId ? getApplicableContract(labelId) : null;
+
+                if (labelContract?.labelPercentage) {
+                    deducted *= (100 - labelContract.labelPercentage) / 100;
+                    applied = true;
+                    sumDeductionPercent += labelContract.labelPercentage;
                 }
 
-                if (applicableContract) {
-                    percentage = applicableContract.labelPercentage || 0;
-                    deducted = item.dailyRevenue * ((100 - percentage) / 100);
+                const subLabelContract = getApplicableContract(subLabelId);
+                if (subLabelContract?.labelPercentage) {
+                    deducted *= (100 - subLabelContract.labelPercentage) / 100;
                     applied = true;
+                    sumDeductionPercent += subLabelContract.labelPercentage;
                 }
 
                 if (applied) {
@@ -1181,15 +1214,24 @@ class revenueUploadController {
                         $addFields: {
                             netRevenue: {
                                 $multiply: [
-                                    { $convert: { input: "$net_total", to: "double", onError: 0, onNull: 0 } },
-                                    { $divide: [{ $subtract: [100, { $ifNull: ["$percentage", 0] }] }, 100] }
+                                    {
+                                        $convert: {
+                                            input: "$net_total",
+                                            to: "double",
+                                            onError: 0,
+                                            onNull: 0
+                                        }
+                                    },
+                                    {
+                                        $divide: [
+                                            { $subtract: [100, { $ifNull: ["$percentage", 0] }] },
+                                            100
+                                        ]
+                                    }
                                 ]
                             }
                         }
-                    }
-                ];
-
-                pipeline.push(
+                    },
                     {
                         $group: {
                             _id: groupId,
@@ -1199,11 +1241,12 @@ class revenueUploadController {
                             sampleArtist: { $first: "$track_artist" },
                             sampleRelease: { $first: "$release" },
                             sampleISRC: { $first: "$isrc_code" },
-                            sampleTerritory: { $first: "$territory" }
+                            sampleTerritory: { $first: "$territory" },
+                            sampleUserId: { $first: "$user_id" }
                         }
                     },
                     { $sort: { revenue: -1 } }
-                );
+                ];
 
                 const countPipeline = [...pipeline, { $count: "total" }];
                 const countResult = await TblReport2025.aggregate(countPipeline).allowDiskUse(true);
@@ -1211,12 +1254,89 @@ class revenueUploadController {
                 pipeline.push({ $skip: skipNum }, { $limit: limitNum });
 
                 const groupedData = await TblReport2025.aggregate(pipeline).allowDiskUse(true);
+                const uniqueUserIds = [
+                    ...new Set(groupedData.map(d => d.sampleUserId).filter(Boolean))
+                ];
+
+                const users = uniqueUserIds.length
+                    ? await User.find(
+                        { id: { $in: uniqueUserIds } },
+                        { id: 1, parent_id: 1 }
+                    ).lean()
+                    : [];
+
+                const parentMap = new Map();
+                users.forEach(u => {
+                    parentMap.set(u.id, u.parent_id || null);
+                });
+
+                const allUserIds = new Set(uniqueUserIds);
+                users.forEach(u => {
+                    if (u.parent_id) allUserIds.add(u.parent_id);
+                });
+
+                const contracts = allUserIds.size
+                    ? await Contract.find({
+                        user_id: { $in: [...allUserIds] },
+                        status: "active"
+                    }).lean()
+                    : [];
+
+                const contractMap = new Map();
+                contracts.forEach(c => {
+                    if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                    contractMap.get(c.user_id).push(c);
+                });
+
+                for (const [uid, list] of contractMap.entries()) {
+                    list.sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+                }
+
+                const getApplicableContract = (uid, date) => {
+                    const list = contractMap.get(uid) || [];
+                    let found = null;
+
+                    for (const c of list) {
+                        if (date >= c.startDate) found = c;
+                        else break;
+                    }
+                    return found;
+                };
+
+                const applyDeduction = (revenue, uid, date) => {
+                    let deductedRevenue = revenue;
+
+                    const parentId = parentMap.get(uid);
+
+                    const labelContract = parentId
+                        ? getApplicableContract(parentId, date)
+                        : null;
+
+                    if (labelContract?.labelPercentage) {
+                        deductedRevenue *= (100 - labelContract.labelPercentage) / 100;
+                    }
+
+                    const subLabelContract = getApplicableContract(uid, date);
+
+                    if (subLabelContract?.labelPercentage) {
+                        deductedRevenue *= (100 - subLabelContract.labelPercentage) / 100;
+                    }
+
+                    return deductedRevenue;
+                };
 
                 const reports = groupedData.map(item => {
+
+                    const finalRevenue = applyDeduction(
+                        item.revenue,
+                        item.sampleUserId,
+                        item.sampleDate
+                    );
+
                     const baseResponse = {
                         artist: item._id.artist || item.sampleArtist || "Unknown Artist",
                         territory: item._id.territory || item.sampleTerritory || "Global",
-                        revenue: Number(item.revenue.toFixed(2)),
+                        revenue: Number(finalRevenue.toFixed(2)),
                         date: item.sampleDate || "-",
                         platform: item.samplePlatform || "Various"
                     };
@@ -1244,24 +1364,106 @@ class revenueUploadController {
                 });
 
             } else {
-                const countResult = await TblReport2025.countDocuments(filter);
-                totalRecords = countResult;
+                totalRecords = await TblReport2025.countDocuments(filter);
 
                 const rawData = await TblReport2025.find(filter)
-                    .select('date retailer track_artist release isrc_code territory net_total percentage')
+                    .select("user_id date retailer track_artist release isrc_code territory net_total percentage")
                     .skip(skipNum)
                     .limit(limitNum)
                     .lean();
 
-                const reports = rawData.map(row => ({
-                    date: row.date || "-",
-                    platform: row.retailer || "Unknown",
-                    artist: row.track_artist || "Unknown Artist",
-                    release: row.release || "Unknown Release",
-                    isrc_code: row.isrc_code || "Unknown",
-                    territory: row.territory || "Global",
-                    revenue: Number((row.net_total * (100 - (row.percentage || 0)) / 100).toFixed(2))
-                }));
+                const uniqueUserIds = [
+                    ...new Set(rawData.map(d => d.user_id).filter(Boolean))
+                ];
+
+                const users = uniqueUserIds.length
+                    ? await User.find(
+                        { id: { $in: uniqueUserIds } },
+                        { id: 1, parent_id: 1 }
+                    ).lean()
+                    : [];
+
+                const parentMap = new Map();
+                users.forEach(u => {
+                    parentMap.set(u.id, u.parent_id || null);
+                });
+
+                const allUserIds = new Set(uniqueUserIds);
+                users.forEach(u => {
+                    if (u.parent_id) allUserIds.add(u.parent_id);
+                });
+
+                const contracts = allUserIds.size
+                    ? await Contract.find({
+                        user_id: { $in: [...allUserIds] },
+                        status: "active"
+                    }).lean()
+                    : [];
+
+                const contractMap = new Map();
+                contracts.forEach(c => {
+                    if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                    contractMap.get(c.user_id).push(c);
+                });
+
+                for (const [uid, list] of contractMap.entries()) {
+                    list.sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+                }
+
+                const getApplicableContract = (uid, date) => {
+                    const list = contractMap.get(uid) || [];
+                    let found = null;
+
+                    for (const c of list) {
+                        if (date >= c.startDate) found = c;
+                        else break;
+                    }
+                    return found;
+                };
+
+                const applyDeduction = (revenue, uid, date) => {
+                    let deductedRevenue = revenue;
+
+                    const parentId = parentMap.get(uid);
+
+                    const labelContract = parentId
+                        ? getApplicableContract(parentId, date)
+                        : null;
+
+                    if (labelContract?.labelPercentage) {
+                        deductedRevenue *= (100 - labelContract.labelPercentage) / 100;
+                    }
+
+                    const subLabelContract = getApplicableContract(uid, date);
+
+                    if (subLabelContract?.labelPercentage) {
+                        deductedRevenue *= (100 - subLabelContract.labelPercentage) / 100;
+                    }
+
+                    return deductedRevenue;
+                };
+
+                const reports = rawData.map(row => {
+
+                    const baseRevenue =
+                        row.net_total * (100 - (row.percentage || 0)) / 100;
+
+                    const finalRevenue = applyDeduction(
+                        baseRevenue,
+                        row.user_id,
+                        row.date
+                    );
+
+                    return {
+                        date: row.date || "-",
+                        platform: row.retailer || "Unknown",
+                        artist: row.track_artist || "Unknown Artist",
+                        release: row.release || "Unknown Release",
+                        isrc_code: row.isrc_code || "Unknown",
+                        territory: row.territory || "Global",
+                        revenue: Number(finalRevenue.toFixed(2))
+                    };
+                });
 
                 return res.json({
                     success: true,
@@ -1359,8 +1561,29 @@ class revenueUploadController {
             const dailyData = await YouTube.aggregate(dailyPipeline).allowDiskUse(true);
             const uniqueUserIds = [...new Set(dailyData.map(d => d.user_id).filter(Boolean))];
 
-            const contracts = uniqueUserIds.length
-                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+            const users = uniqueUserIds.length
+                ? await User.find(
+                    { id: { $in: uniqueUserIds } },
+                    { id: 1, parent_id: 1 }
+                ).lean()
+                : [];
+
+            const parentMap = new Map();
+            users.forEach(u => {
+                parentMap.set(u.id, u.parent_id || null);
+            });
+
+
+            const allUserIds = new Set(uniqueUserIds);
+            users.forEach(u => {
+                if (u.parent_id) allUserIds.add(u.parent_id);
+            });
+
+            const contracts = allUserIds.size
+                ? await Contract.find({
+                    user_id: { $in: [...allUserIds] },
+                    status: "active"
+                }).lean()
                 : [];
 
             const contractMap = new Map();
@@ -1385,21 +1608,34 @@ class revenueUploadController {
                 let percentage = 0;
                 let applied = false;
 
-                const userContracts = contractMap.get(item.user_id) || [];
-                let applicableContract = null;
+                const getApplicableContract = (uid) => {
+                    const list = contractMap.get(uid) || [];
+                    let found = null;
 
-                for (const contract of userContracts) {
-                    if (item.date >= contract.startDate) {
-                        applicableContract = contract;
-                    } else {
-                        break;
+                    for (const c of list) {
+                        if (item.date >= c.startDate) found = c;
+                        else break;
                     }
+                    return found;
+                };
+
+                const subLabelId = item.user_id;
+                const labelId = parentMap.get(subLabelId);
+
+                // 1️⃣ Apply LABEL contract first
+                const labelContract = labelId ? getApplicableContract(labelId) : null;
+                if (labelContract?.labelPercentage) {
+                    deducted *= (100 - labelContract.labelPercentage) / 100;
+                    applied = true;
+                    sumDeductionPercent += labelContract.labelPercentage;
                 }
 
-                if (applicableContract) {
-                    percentage = applicableContract.labelPercentage || 0;
-                    deducted = item.dailyRevenue * ((100 - percentage) / 100);
+                // 2️⃣ Apply SUB-LABEL contract
+                const subLabelContract = getApplicableContract(subLabelId);
+                if (subLabelContract?.labelPercentage) {
+                    deducted *= (100 - subLabelContract.labelPercentage) / 100;
                     applied = true;
+                    sumDeductionPercent += subLabelContract.labelPercentage;
                 }
 
                 if (applied) {
@@ -1605,6 +1841,7 @@ class revenueUploadController {
                 "YouTubeVideoClaim",
                 "YTPremiumRevenue"
             ];
+
             if (platform && platform !== "") {
                 filter.retailer = { $in: platform.split(",").map(p => p.trim()) };
             } else {
@@ -1645,14 +1882,16 @@ class revenueUploadController {
                             netRevenue: {
                                 $multiply: [
                                     { $toDouble: "$total_revenue" },
-                                    { $divide: [{ $subtract: [100, { $ifNull: ["$percentage", 0] }] }, 100] }
+                                    {
+                                        $divide: [
+                                            { $subtract: [100, { $ifNull: ["$percentage", 0] }] },
+                                            100
+                                        ]
+                                    }
                                 ]
                             }
                         }
-                    }
-                ];
-
-                pipeline.push(
+                    },
                     {
                         $group: {
                             _id: groupId,
@@ -1662,11 +1901,12 @@ class revenueUploadController {
                             sampleArtist: { $first: "$track_artist" },
                             sampleRelease: { $first: "$asset_title" },
                             sampleISRC: { $first: "$isrc_code" },
-                            sampleTerritory: { $first: "$country" }
+                            sampleTerritory: { $first: "$country" },
+                            sampleUserId: { $first: "$user_id" }
                         }
                     },
                     { $sort: { revenue: -1 } }
-                );
+                ];
 
                 const countPipeline = [...pipeline, { $count: "total" }];
                 const countResult = await YouTube.aggregate(countPipeline).allowDiskUse(true);
@@ -1676,19 +1916,99 @@ class revenueUploadController {
 
                 const groupedData = await YouTube.aggregate(pipeline).allowDiskUse(true);
 
+                const uniqueUserIds = [
+                    ...new Set(groupedData.map(d => d.sampleUserId).filter(Boolean))
+                ];
+
+                const users = uniqueUserIds.length
+                    ? await User.find(
+                        { id: { $in: uniqueUserIds } },
+                        { id: 1, parent_id: 1 }
+                    ).lean()
+                    : [];
+
+                const parentMap = new Map();
+                users.forEach(u => {
+                    parentMap.set(u.id, u.parent_id || null);
+                });
+
+                const allUserIds = new Set(uniqueUserIds);
+                users.forEach(u => {
+                    if (u.parent_id) allUserIds.add(u.parent_id);
+                });
+
+                const contracts = allUserIds.size
+                    ? await Contract.find({
+                        user_id: { $in: [...allUserIds] },
+                        status: "active"
+                    }).lean()
+                    : [];
+
+                const contractMap = new Map();
+                contracts.forEach(c => {
+                    if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                    contractMap.get(c.user_id).push(c);
+                });
+
+                for (const [uid, list] of contractMap.entries()) {
+                    list.sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+                }
+
+                const getApplicableContract = (uid, date) => {
+                    const list = contractMap.get(uid) || [];
+                    let found = null;
+
+                    for (const c of list) {
+                        if (date >= c.startDate) found = c;
+                        else break;
+                    }
+                    return found;
+                };
+
+                const applyDeduction = (revenue, uid, date) => {
+                    let deductedRevenue = revenue;
+
+                    const parentId = parentMap.get(uid);
+
+                    const labelContract = parentId
+                        ? getApplicableContract(parentId, date)
+                        : null;
+
+                    if (labelContract?.labelPercentage) {
+                        deductedRevenue *= (100 - labelContract.labelPercentage) / 100;
+                    }
+
+                    const subLabelContract = getApplicableContract(uid, date);
+
+                    if (subLabelContract?.labelPercentage) {
+                        deductedRevenue *= (100 - subLabelContract.labelPercentage) / 100;
+                    }
+
+                    return deductedRevenue;
+                };
+
                 const reports = groupedData.map(item => {
+
+                    const finalRevenue = applyDeduction(
+                        item.revenue,
+                        item.sampleUserId,
+                        item.sampleDate
+                    );
+
                     const baseResponse = {
                         artist: item._id.artist || item.sampleArtist || "Unknown Artist",
                         territory: item._id.territory || item.sampleTerritory || "Global",
-                        revenue: Number(item.revenue.toFixed(2)),
+                        revenue: Number(finalRevenue.toFixed(2)),
                         date: item.sampleDate || "-",
                         platform: item.samplePlatform || "YouTube"
                     };
 
                     if (includeTrack) {
-                        baseResponse.isrc_code = item._id.isrc_code || item.sampleISRC || "Unknown";
+                        baseResponse.isrc_code =
+                            item._id.isrc_code || item.sampleISRC || "Unknown";
                     } else if (includeRelease) {
-                        baseResponse.release = item._id.release || item.sampleRelease || "Unknown Release";
+                        baseResponse.release =
+                            item._id.release || item.sampleRelease || "Unknown Release";
                     }
 
                     return baseResponse;
@@ -1708,24 +2028,107 @@ class revenueUploadController {
                 });
 
             } else {
-                const countResult = await YouTube.countDocuments(filter);
-                totalRecords = countResult;
+                totalRecords = await YouTube.countDocuments(filter);
 
                 const rawData = await YouTube.find(filter)
-                    .select('date retailer track_artist asset_title isrc_code country total_revenue percentage')
+                    .select("user_id date retailer track_artist asset_title isrc_code country total_revenue percentage")
                     .skip(skipNum)
                     .limit(limitNum)
                     .lean();
 
-                const reports = rawData.map(row => ({
-                    date: row.date || "-",
-                    platform: row.retailer || "YouTube",
-                    artist: row.track_artist || "Unknown Artist",
-                    release: row.asset_title || "Unknown Release",
-                    isrc_code: row.isrc_code || "Unknown",
-                    territory: row.country || "Global",
-                    revenue: Number((row.total_revenue * (100 - (row.percentage || 0)) / 100).toFixed(2))
-                }));
+
+                const uniqueUserIds = [
+                    ...new Set(rawData.map(d => d.user_id).filter(Boolean))
+                ];
+
+                const users = uniqueUserIds.length
+                    ? await User.find(
+                        { id: { $in: uniqueUserIds } },
+                        { id: 1, parent_id: 1 }
+                    ).lean()
+                    : [];
+
+                const parentMap = new Map();
+                users.forEach(u => {
+                    parentMap.set(u.id, u.parent_id || null);
+                });
+
+                const allUserIds = new Set(uniqueUserIds);
+                users.forEach(u => {
+                    if (u.parent_id) allUserIds.add(u.parent_id);
+                });
+
+                const contracts = allUserIds.size
+                    ? await Contract.find({
+                        user_id: { $in: [...allUserIds] },
+                        status: "active"
+                    }).lean()
+                    : [];
+
+                const contractMap = new Map();
+                contracts.forEach(c => {
+                    if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                    contractMap.get(c.user_id).push(c);
+                });
+
+                for (const [uid, list] of contractMap.entries()) {
+                    list.sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+                }
+
+                const getApplicableContract = (uid, date) => {
+                    const list = contractMap.get(uid) || [];
+                    let found = null;
+
+                    for (const c of list) {
+                        if (date >= c.startDate) found = c;
+                        else break;
+                    }
+                    return found;
+                };
+
+                const applyDeduction = (revenue, uid, date) => {
+                    let deductedRevenue = revenue;
+
+                    const parentId = parentMap.get(uid);
+
+                    const labelContract = parentId
+                        ? getApplicableContract(parentId, date)
+                        : null;
+
+                    if (labelContract?.labelPercentage) {
+                        deductedRevenue *= (100 - labelContract.labelPercentage) / 100;
+                    }
+
+                    const subLabelContract = getApplicableContract(uid, date);
+
+                    if (subLabelContract?.labelPercentage) {
+                        deductedRevenue *= (100 - subLabelContract.labelPercentage) / 100;
+                    }
+
+                    return deductedRevenue;
+                };
+
+                const reports = rawData.map(row => {
+
+                    const baseRevenue =
+                        row.total_revenue * (100 - (row.percentage || 0)) / 100;
+
+                    const finalRevenue = applyDeduction(
+                        baseRevenue,
+                        row.user_id,
+                        row.date
+                    );
+
+                    return {
+                        date: row.date || "-",
+                        platform: row.retailer || "YouTube",
+                        artist: row.track_artist || "Unknown Artist",
+                        release: row.asset_title || "Unknown Release",
+                        isrc_code: row.isrc_code || "Unknown",
+                        territory: row.country || "Global",
+                        revenue: Number(finalRevenue.toFixed(2))
+                    };
+                });
 
                 return res.json({
                     success: true,
@@ -1792,13 +2195,11 @@ class revenueUploadController {
     }
 
     // Separate function to process the report
-    async processAudioStreamingReport(reportId, filters) {
+    async processAudioStreamingReport(reportId, userId, filters) {
         try {
             console.log(`Processing report ${reportId} with filters:`, filters);
 
             const {
-                userId,
-                role,
                 labelId,
                 platform,
                 fromDate,
@@ -1807,15 +2208,31 @@ class revenueUploadController {
 
             const userFilter = {};
 
-            if (userId && role) {
+            if (userId && !labelId) {
+
+                const userData = await User.findOne(
+                    { id: userId },
+                    { role: 1, id: 1 }
+                ).lean();
+
+                if (!userData) {
+                    throw new Error("User not found in database");
+                }
+
+                const role = userData.role;
+
                 if (role !== "Super Admin" && role !== "Manager") {
-                    const users = await User.find({ parent_id: userId }, { id: 1 });
+
+                    const users = await User.find(
+                        { parent_id: userId },
+                        { id: 1 }
+                    ).lean();
+
                     const childIds = users.map(u => u.id);
                     childIds.push(userId);
                     userFilter.user_id = { $in: childIds };
                 }
             }
-            ;
 
             const filter = { ...userFilter };
 
@@ -1855,19 +2272,88 @@ class revenueUploadController {
 
             if (count === 0) {
                 await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
-                    status: 'failed',
-                    error: 'No data found',
+                    status: "failed",
+                    error: "No data found",
                 });
                 return;
             }
 
+            const uniqueUserIds = await TblReport2025.distinct("user_id", filter);
+
+            const users = uniqueUserIds.length
+                ? await User.find(
+                    { id: { $in: uniqueUserIds } },
+                    { id: 1, parent_id: 1 }
+                ).lean()
+                : [];
+
+            const parentMap = new Map();
+            users.forEach(u => {
+                parentMap.set(u.id, u.parent_id || null);
+            });
+
+            const allUserIds = new Set(uniqueUserIds);
+            users.forEach(u => {
+                if (u.parent_id) allUserIds.add(u.parent_id);
+            });
+
+            const contracts = allUserIds.size
+                ? await Contract.find({
+                    user_id: { $in: [...allUserIds] },
+                    status: "active"
+                }).lean()
+                : [];
+
+            const contractMap = new Map();
+            contracts.forEach(c => {
+                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                contractMap.get(c.user_id).push(c);
+            });
+
+            for (const [uid, list] of contractMap.entries()) {
+                list.sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+            }
+
+            const getApplicableContract = (uid, date) => {
+                const list = contractMap.get(uid) || [];
+                let found = null;
+
+                for (const c of list) {
+                    if (date >= c.startDate) found = c;
+                    else break;
+                }
+                return found;
+            };
+
+            const applyDeduction = (revenue, uid, date) => {
+                let deductedRevenue = revenue;
+
+                const parentId = parentMap.get(uid);
+
+                const labelContract = parentId
+                    ? getApplicableContract(parentId, date)
+                    : null;
+
+                if (labelContract?.labelPercentage) {
+                    deductedRevenue *= (100 - labelContract.labelPercentage) / 100;
+                }
+
+                const subLabelContract = getApplicableContract(uid, date);
+
+                if (subLabelContract?.labelPercentage) {
+                    deductedRevenue *= (100 - subLabelContract.labelPercentage) / 100;
+                }
+
+                return deductedRevenue;
+            };
+
             const MAX_ROWS_PER_SHEET = 1000000;
-            const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
+            const timestamp = new Date().toISOString().split("T")[0].replace(/-/g, "");
             const randomSuffix = Math.random().toString(36).substring(2, 8);
             const filename = `Revenue_Report_${timestamp}_${randomSuffix}.xlsx`;
 
-            const relativeFolder = 'reports';
-            const absoluteFolder = path.join(__dirname, '../uploads', relativeFolder);
+            const relativeFolder = "reports";
+            const absoluteFolder = path.join(__dirname, "../uploads", relativeFolder);
 
             if (!fs.existsSync(absoluteFolder)) {
                 fs.mkdirSync(absoluteFolder, { recursive: true });
@@ -1883,7 +2369,7 @@ class revenueUploadController {
                 useSharedStrings: true
             });
 
-            let headers = ['S.No'];
+            let headers = ["S.No"];
             let headersDetermined = false;
             let currentWorksheet = null;
             let rowCountInCurrentSheet = 0;
@@ -1900,14 +2386,12 @@ class revenueUploadController {
                 currentWorksheet = workbook.addWorksheet(`Sheet ${sheetIndex}`);
                 sheetIndex++;
 
-                const columnDefs = [
-                    { header: 'S.No', key: 'sno', width: 12 }
-                ];
+                const columnDefs = [{ header: "S.No", key: "sno", width: 12 }];
 
                 headers.slice(1).forEach(h => {
                     columnDefs.push({
                         header: h,
-                        key: h.toLowerCase().replace(/\s+/g, '_'),
+                        key: h.toLowerCase().replace(/\s+/g, "_"),
                         width: Math.min(Math.max(h.length + 5, 15), 40)
                     });
                 });
@@ -1917,63 +2401,49 @@ class revenueUploadController {
                 const headerRow = currentWorksheet.getRow(1);
                 headerRow.font = { bold: true };
                 headerRow.fill = {
-                    type: 'pattern',
-                    pattern: 'solid',
-                    fgColor: { argb: 'FFE0E0E0' }
+                    type: "pattern",
+                    pattern: "solid",
+                    fgColor: { argb: "FFE0E0E0" }
                 };
 
                 rowCountInCurrentSheet = 0;
             }
 
-            const collection = mongoose.connection.db.collection('tblreport_2025');
+            const collection = mongoose.connection.db.collection("tblreport_2025");
             const cursor = collection.aggregate(pipeline, {
                 allowDiskUse: true,
                 cursor: { batchSize: 1000 }
             });
 
-            function addOverflowMessageRow(worksheet, headers, nextSheetNumber) {
-                const messageRow = {
-                    sno: ""
-                };
-
-                const firstDataKey = headers[1]
-                    .toLowerCase()
-                    .replace(/\s+/g, "_");
-
-                messageRow[firstDataKey] =
-                    `⚠ Data continues in Sheet ${nextSheetNumber}. Please check the next sheet.`;
-
-                const row = worksheet.addRow(messageRow);
-
-                row.font = { bold: true, italic: true };
-                row.alignment = { vertical: "middle", horizontal: "left" };
-
-                row.commit();
-            }
-
 
             for await (const doc of cursor) {
+
                 if (!headersDetermined) {
                     Object.keys(doc).forEach(key => {
                         if (!excludeFields.includes(key) && key !== "date") {
                             headers.push(key);
                         }
                     });
+
                     headers.push("date");
                     await createNewWorksheet();
                     headersDetermined = true;
                 }
 
                 if (rowCountInCurrentSheet >= MAX_ROWS_PER_SHEET) {
-                    addOverflowMessageRow(
-                        currentWorksheet,
-                        headers,
-                        sheetIndex
-                    );
-
                     await createNewWorksheet();
                 }
 
+                if (doc.net_total) {
+                    const baseRevenue =
+                        doc.net_total * (100 - (doc.percentage || 0)) / 100;
+
+                    doc.net_total = applyDeduction(
+                        baseRevenue,
+                        doc.user_id,
+                        doc.date
+                    ).toFixed(2);
+                }
 
                 const rowData = {
                     sno: totalRowsProcessed + 1
@@ -1981,10 +2451,11 @@ class revenueUploadController {
 
                 Object.keys(doc).forEach(key => {
                     if (!excludeFields.includes(key) && key !== "date") {
-                        const normKey = key.toLowerCase().replace(/\s+/g, '_');
+                        const normKey = key.toLowerCase().replace(/\s+/g, "_");
                         rowData[normKey] = doc[key] ?? "";
                     }
                 });
+
                 rowData.date = doc.date ?? "";
 
                 const row = currentWorksheet.addRow(rowData);
@@ -2003,14 +2474,13 @@ class revenueUploadController {
             }
 
             await workbook.commit();
-
             cursor.close();
 
             console.log(`Excel report generated: ${absoluteFilePath}`);
             console.log(`Total rows: ${totalRowsProcessed} across ${sheetIndex - 1} sheet(s)`);
 
             await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
-                status: 'ready',
+                status: "ready",
                 filename,
                 filePath: relativePath,
                 fileURL
@@ -2020,10 +2490,12 @@ class revenueUploadController {
 
         } catch (error) {
             console.error(`Error processing report ${reportId}:`, error);
+
             await AudioStreamingReportHistory.findByIdAndUpdate(reportId, {
-                status: 'failed',
-                error: error.message || 'Unknown error',
+                status: "failed",
+                error: error.message || "Unknown error",
             });
+
             throw error;
         }
     }
@@ -2073,13 +2545,11 @@ class revenueUploadController {
     }
 
     // Process YouTube report
-    async processYoutubeReport(reportId, filters) {
+    async processYoutubeReport(reportId, userId, filters) {
         try {
             console.log(`Processing YouTube report ${reportId} with filters:`, filters);
 
             const {
-                userId,
-                role,
                 labelId,
                 platform,
                 fromDate,
@@ -2088,9 +2558,26 @@ class revenueUploadController {
 
             const userFilter = {};
 
-            if (userId && role) {
+            if (userId && !labelId) {
+
+                const userData = await User.findOne(
+                    { id: userId },
+                    { role: 1, id: 1 }
+                ).lean();
+
+                if (!userData) {
+                    throw new Error("User not found in database");
+                }
+
+                const role = userData.role;
+
                 if (role !== "Super Admin" && role !== "Manager") {
-                    const users = await User.find({ parent_id: userId }, { id: 1 });
+
+                    const users = await User.find(
+                        { parent_id: userId },
+                        { id: 1 }
+                    ).lean();
+
                     const childIds = users.map(u => u.id);
                     childIds.push(userId);
                     userFilter.user_id = { $in: childIds };
@@ -2150,6 +2637,75 @@ class revenueUploadController {
                 });
                 return;
             }
+
+            const uniqueUserIds = await YouTube.distinct("user_id", filter);
+
+            const users = uniqueUserIds.length
+                ? await User.find(
+                    { id: { $in: uniqueUserIds } },
+                    { id: 1, parent_id: 1 }
+                ).lean()
+                : [];
+
+            const parentMap = new Map();
+            users.forEach(u => {
+                parentMap.set(u.id, u.parent_id || null);
+            });
+
+            const allUserIds = new Set(uniqueUserIds);
+            users.forEach(u => {
+                if (u.parent_id) allUserIds.add(u.parent_id);
+            });
+
+            const contracts = allUserIds.size
+                ? await Contract.find({
+                    user_id: { $in: [...allUserIds] },
+                    status: "active"
+                }).lean()
+                : [];
+
+            const contractMap = new Map();
+            contracts.forEach(c => {
+                if (!contractMap.has(c.user_id)) contractMap.set(c.user_id, []);
+                contractMap.get(c.user_id).push(c);
+            });
+
+            for (const [uid, list] of contractMap.entries()) {
+                list.sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+            }
+
+            const getApplicableContract = (uid, date) => {
+                const list = contractMap.get(uid) || [];
+                let found = null;
+
+                for (const c of list) {
+                    if (date >= c.startDate) found = c;
+                    else break;
+                }
+                return found;
+            };
+
+            const applyDeduction = (revenue, uid, date) => {
+                let deductedRevenue = revenue;
+
+                const parentId = parentMap.get(uid);
+
+                const labelContract = parentId
+                    ? getApplicableContract(parentId, date)
+                    : null;
+
+                if (labelContract?.labelPercentage) {
+                    deductedRevenue *= (100 - labelContract.labelPercentage) / 100;
+                }
+
+                const subLabelContract = getApplicableContract(uid, date);
+
+                if (subLabelContract?.labelPercentage) {
+                    deductedRevenue *= (100 - subLabelContract.labelPercentage) / 100;
+                }
+
+                return deductedRevenue;
+            };
 
             const MAX_ROWS_PER_SHEET = 1000000;
             const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
@@ -2235,6 +2791,17 @@ class revenueUploadController {
 
                 if (rowCountInCurrentSheet >= MAX_ROWS_PER_SHEET) {
                     await createNewWorksheet();
+                }
+
+                if (doc.total_revenue) {
+                    const baseRevenue =
+                        doc.total_revenue * (100 - (doc.percentage || 0)) / 100;
+
+                    doc.total_revenue = applyDeduction(
+                        baseRevenue,
+                        doc.user_id,
+                        doc.date
+                    ).toFixed(2);
                 }
 
                 const rowData = {
@@ -2346,7 +2913,7 @@ class revenueUploadController {
 
                 if (!lockedReport) continue;
 
-                await this.processAudioStreamingReport(report._id, report.filters);
+                await this.processAudioStreamingReport(report._id, report.user_id, report.filters);
             }
         } catch (error) {
             console.error('Error in processPendingReports cron job:', error);
@@ -2409,7 +2976,7 @@ class revenueUploadController {
 
                 if (!lockedReport) continue;
 
-                await this.processYoutubeReport(report._id, report.filters);
+                await this.processYoutubeReport(report._id, report.user_id, report.filters);
             }
         } catch (error) {
             console.error('Error in processPendingYoutubeReports cron job:', error);
@@ -2963,8 +3530,29 @@ class revenueUploadController {
 
             const uniqueUserIds = [...new Set(dailyData.map(d => d._id.user_id))];
 
-            const contracts = uniqueUserIds.length
-                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+            const users = uniqueUserIds.length
+                ? await User.find(
+                    { id: { $in: uniqueUserIds } },
+                    { id: 1, parent_id: 1 }
+                ).lean()
+                : [];
+
+            const parentMap = new Map();
+            users.forEach(u => {
+                parentMap.set(u.id, u.parent_id || null);
+            });
+
+
+            const allUserIds = new Set(uniqueUserIds);
+            users.forEach(u => {
+                if (u.parent_id) allUserIds.add(u.parent_id);
+            });
+
+            const contracts = allUserIds.size
+                ? await Contract.find({
+                    user_id: { $in: [...allUserIds] },
+                    status: "active"
+                }).lean()
                 : [];
 
             const contractMap = new Map();
@@ -2985,21 +3573,33 @@ class revenueUploadController {
             dailyData.forEach(item => {
                 let revenue = item.revenue;
 
-                const userContracts = contractMap.get(item._id.user_id) || [];
+                const subLabelId = item._id.user_id;
+                const labelId = parentMap.get(subLabelId);
 
-                let applicableContract = null;
+                const getApplicableContract = (uid) => {
+                    const list = contractMap.get(uid) || [];
+                    let found = null;
 
-                for (const c of userContracts) {
-                    if (item._id.date >= c.startDate) {
-                        applicableContract = c;
-                    } else {
-                        break;
+                    for (const c of list) {
+                        if (item._id.date >= c.startDate) {
+                            found = c;
+                        } else {
+                            break;
+                        }
+                    }
+                    return found;
+                };
+
+                if (labelId) {
+                    const labelContract = getApplicableContract(labelId);
+                    if (labelContract?.labelPercentage) {
+                        revenue *= (100 - labelContract.labelPercentage) / 100;
                     }
                 }
 
-                if (applicableContract) {
-                    const percentage = applicableContract.labelPercentage || 0;
-                    revenue *= (100 - percentage) / 100;
+                const subLabelContract = getApplicableContract(subLabelId);
+                if (subLabelContract?.labelPercentage) {
+                    revenue *= (100 - subLabelContract.labelPercentage) / 100;
                 }
 
                 totalRevenue += revenue;
@@ -3280,9 +3880,31 @@ class revenueUploadController {
 
             const uniqueUserIds = [...new Set(dailyData.map(d => d._id.user_id))];
 
-            const contracts = uniqueUserIds.length
-                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+            const users = uniqueUserIds.length
+                ? await User.find(
+                    { id: { $in: uniqueUserIds } },
+                    { id: 1, parent_id: 1 }
+                ).lean()
                 : [];
+
+            const parentMap = new Map();
+            users.forEach(u => {
+                parentMap.set(u.id, u.parent_id || null);
+            });
+
+
+            const allUserIds = new Set(uniqueUserIds);
+            users.forEach(u => {
+                if (u.parent_id) allUserIds.add(u.parent_id);
+            });
+
+            const contracts = allUserIds.size
+                ? await Contract.find({
+                    user_id: { $in: [...allUserIds] },
+                    status: "active"
+                }).lean()
+                : [];
+
 
             const contractMap = new Map();
             contracts.forEach(c => {
@@ -3302,21 +3924,33 @@ class revenueUploadController {
             dailyData.forEach(item => {
                 let revenue = item.revenue;
 
-                const userContracts = contractMap.get(item._id.user_id) || [];
+                const subLabelId = item._id.user_id;
+                const labelId = parentMap.get(subLabelId);
 
-                let applicableContract = null;
+                const getApplicableContract = (uid) => {
+                    const list = contractMap.get(uid) || [];
+                    let found = null;
 
-                for (const c of userContracts) {
-                    if (item._id.date >= c.startDate) {
-                        applicableContract = c;
-                    } else {
-                        break;
+                    for (const c of list) {
+                        if (item._id.date >= c.startDate) {
+                            found = c;
+                        } else {
+                            break;
+                        }
+                    }
+                    return found;
+                };
+
+                if (labelId) {
+                    const labelContract = getApplicableContract(labelId);
+                    if (labelContract?.labelPercentage) {
+                        revenue *= (100 - labelContract.labelPercentage) / 100;
                     }
                 }
 
-                if (applicableContract) {
-                    const percentage = applicableContract.labelPercentage || 0;
-                    revenue *= (100 - percentage) / 100;
+                const subLabelContract = getApplicableContract(subLabelId);
+                if (subLabelContract?.labelPercentage) {
+                    revenue *= (100 - subLabelContract.labelPercentage) / 100;
                 }
 
                 totalRevenue += revenue;
@@ -3652,8 +4286,29 @@ class revenueUploadController {
 
             const uniqueUserIds = [...new Set(dailyData.map(d => d._id.user_id).filter(Boolean))];
 
-            const contracts = uniqueUserIds.length
-                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+            const users = uniqueUserIds.length
+                ? await User.find(
+                    { id: { $in: uniqueUserIds } },
+                    { id: 1, parent_id: 1 }
+                ).lean()
+                : [];
+
+            const parentMap = new Map();
+            users.forEach(u => {
+                parentMap.set(u.id, u.parent_id || null);
+            });
+
+
+            const allUserIds = new Set(uniqueUserIds);
+            users.forEach(u => {
+                if (u.parent_id) allUserIds.add(u.parent_id);
+            });
+
+            const contracts = allUserIds.size
+                ? await Contract.find({
+                    user_id: { $in: [...allUserIds] },
+                    status: "active"
+                }).lean()
                 : [];
 
             const contractMap = new Map();
@@ -3674,21 +4329,33 @@ class revenueUploadController {
             dailyData.forEach(item => {
                 let revenue = item.revenue;
 
-                const userContracts = contractMap.get(item._id.user_id) || [];
+                const subLabelId = item._id.user_id;
+                const labelId = parentMap.get(subLabelId);
 
-                let applicableContract = null;
+                const getApplicableContract = (uid) => {
+                    const list = contractMap.get(uid) || [];
+                    let found = null;
 
-                for (const c of userContracts) {
-                    if (item._id.date >= c.startDate) {
-                        applicableContract = c;
-                    } else {
-                        break;
+                    for (const c of list) {
+                        if (item._id.date >= c.startDate) {
+                            found = c;
+                        } else {
+                            break;
+                        }
+                    }
+                    return found;
+                };
+
+                if (labelId) {
+                    const labelContract = getApplicableContract(labelId);
+                    if (labelContract?.labelPercentage) {
+                        revenue *= (100 - labelContract.labelPercentage) / 100;
                     }
                 }
 
-                if (applicableContract) {
-                    const percentage = applicableContract.labelPercentage || 0;
-                    revenue *= (100 - percentage) / 100;
+                const subLabelContract = getApplicableContract(subLabelId);
+                if (subLabelContract?.labelPercentage) {
+                    revenue *= (100 - subLabelContract.labelPercentage) / 100;
                 }
 
                 totalNetRevenue += revenue;
@@ -3944,8 +4611,29 @@ class revenueUploadController {
 
             const uniqueUserIds = [...new Set(dailyData.map(d => d._id.user_id).filter(Boolean))];
 
-            const contracts = uniqueUserIds.length
-                ? await Contract.find({ user_id: { $in: uniqueUserIds }, status: "active" }).lean()
+            const users = uniqueUserIds.length
+                ? await User.find(
+                    { id: { $in: uniqueUserIds } },
+                    { id: 1, parent_id: 1 }
+                ).lean()
+                : [];
+
+            const parentMap = new Map();
+            users.forEach(u => {
+                parentMap.set(u.id, u.parent_id || null);
+            });
+
+
+            const allUserIds = new Set(uniqueUserIds);
+            users.forEach(u => {
+                if (u.parent_id) allUserIds.add(u.parent_id);
+            });
+
+            const contracts = allUserIds.size
+                ? await Contract.find({
+                    user_id: { $in: [...allUserIds] },
+                    status: "active"
+                }).lean()
                 : [];
 
             const contractMap = new Map();
@@ -3966,21 +4654,33 @@ class revenueUploadController {
             dailyData.forEach(item => {
                 let revenue = item.revenue;
 
-                const userContracts = contractMap.get(item._id.user_id) || [];
+                const subLabelId = item._id.user_id;
+                const labelId = parentMap.get(subLabelId);
 
-                let applicableContract = null;
+                const getApplicableContract = (uid) => {
+                    const list = contractMap.get(uid) || [];
+                    let found = null;
 
-                for (const c of userContracts) {
-                    if (item._id.date >= c.startDate) {
-                        applicableContract = c;
-                    } else {
-                        break;
+                    for (const c of list) {
+                        if (item._id.date >= c.startDate) {
+                            found = c;
+                        } else {
+                            break;
+                        }
+                    }
+                    return found;
+                };
+
+                if (labelId) {
+                    const labelContract = getApplicableContract(labelId);
+                    if (labelContract?.labelPercentage) {
+                        revenue *= (100 - labelContract.labelPercentage) / 100;
                     }
                 }
 
-                if (applicableContract) {
-                    const percentage = applicableContract.labelPercentage || 0;
-                    revenue *= (100 - percentage) / 100;
+                const subLabelContract = getApplicableContract(subLabelId);
+                if (subLabelContract?.labelPercentage) {
+                    revenue *= (100 - subLabelContract.labelPercentage) / 100;
                 }
 
                 totalNetRevenue += revenue;

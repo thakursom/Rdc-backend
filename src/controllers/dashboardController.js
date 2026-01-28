@@ -5,24 +5,6 @@ const Youtube = require('../models/youtubeModel');
 const User = require('../models/userModel');
 
 
-const buildMatchStage = async (req) => {
-    const { role, userId } = req.user || {};
-
-    if (!role || role === "Super Admin" || role === "Manager") {
-        return {};
-    }
-
-    try {
-        const users = await User.find({ parent_id: userId }, { _id: 1 }).lean();
-        const childIds = users.map(u => u._id);
-        childIds.push(userId);
-        return { user_id: { $in: childIds } };
-    } catch (err) {
-        console.error("Error in getUserFilter:", err);
-        return { user_id: userId };
-    }
-};
-
 class DashboardController {
     constructor() { }
 
