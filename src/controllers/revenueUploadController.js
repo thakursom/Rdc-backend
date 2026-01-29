@@ -90,6 +90,7 @@ class revenueUploadController {
             }
 
             const labelIdentifiers = new Set();
+            const subLabelIdentifiers = new Set();
             const rowsWithData = [];
 
             const normalizedRows = jsonData.map(row => {
@@ -104,11 +105,13 @@ class revenueUploadController {
             normalizedRows.forEach(r => {
                 let isrcCode = null;
                 let labelCodeFromFile = null;
+                let subLabelCodeFromFile = null;
                 let obj = {};
 
                 if (platform === "Facebook") {
                     isrcCode = r.elected_isrc;
                     labelCodeFromFile = r["Label ID"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: r.service || null,
                         label: r["Label Name"] || null,
@@ -135,6 +138,7 @@ class revenueUploadController {
                 } else if (platform === "Spotify") {
                     isrcCode = r.ISRC;
                     labelCodeFromFile = r["Label Code"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: "Spotify",
                         label: r["Label Name"] || null,
@@ -161,6 +165,7 @@ class revenueUploadController {
                 } else if (platform === "Amazon") {
                     isrcCode = r.ISRC;
                     labelCodeFromFile = r["Label ID"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: "Amazon",
                         label: r["Label Name"] || null,
@@ -187,6 +192,7 @@ class revenueUploadController {
                 } else if (platform === "JioSaavan") {
                     isrcCode = r.ISRC;
                     labelCodeFromFile = r["Label ID"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: "Jio Saavn",
                         label: r["Label Name"] || null,
@@ -213,6 +219,7 @@ class revenueUploadController {
                 } else if (platform === "AppleItunes") {
                     isrcCode = r.ISRC;
                     labelCodeFromFile = r["Label Code"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: "Apple Music",
                         label: r["Label Name"] || null,
@@ -239,6 +246,7 @@ class revenueUploadController {
                 } else if (platform === "TikTok") {
                     isrcCode = r.Isrc;
                     labelCodeFromFile = r["Label ID"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: r.Platforn_Name,
                         label: r["Label Name"] || null,
@@ -265,6 +273,7 @@ class revenueUploadController {
                 } else if (platform === "Gaana") {
                     isrcCode = r.ISRC;
                     labelCodeFromFile = r["Label Code"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: "Gaana",
                         label: r["Label Name"] || null,
@@ -289,6 +298,7 @@ class revenueUploadController {
                 } else if (platform === "SoundRecording") {
                     isrcCode = r.ISRC;
                     labelCodeFromFile = r["Label Code"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: platform || null,
                         track_artist: r.Artist || null,
@@ -317,6 +327,7 @@ class revenueUploadController {
                 } else if (platform === "YouTubeArtTrack") {
                     isrcCode = r.ISRC;
                     labelCodeFromFile = r["Label Code"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: platform || null,
                         track_artist: r.Artist || null,
@@ -349,6 +360,7 @@ class revenueUploadController {
                 } else if (platform === "YouTubePartnerChannel" || platform === "YouTubeRDCChannel") {
                     isrcCode = r.ISRC;
                     labelCodeFromFile = r["Label Code"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: platform || null,
                         track_artist: r.Artist || null,
@@ -378,6 +390,7 @@ class revenueUploadController {
                 } else if (platform === "YouTubeVideoClaim") {
                     isrcCode = r.ISRC;
                     labelCodeFromFile = r["Label Code"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: platform || null,
                         track_artist: r.Artist || null,
@@ -408,6 +421,7 @@ class revenueUploadController {
                 } else if (platform === "YTPremiumRevenue") {
                     isrcCode = r.ISRC;
                     labelCodeFromFile = r["Label Code"];
+                    subLabelCodeFromFile = r["Sub Label Code"];
                     obj = {
                         retailer: platform || null,
                         type: r["Type"] || null,
@@ -440,20 +454,37 @@ class revenueUploadController {
                     labelIdentifiers.add(String(labelCodeFromFile).trim());
                 }
 
+                if (subLabelCodeFromFile) {
+                    subLabelIdentifiers.add(String(subLabelCodeFromFile).trim());
+                }
+
                 rowsWithData.push({
                     data: obj,
                     labelCodeFromFile: labelCodeFromFile || null,
+                    subLabelCodeFromFile: subLabelCodeFromFile || null,
                 });
             });
 
             const labelToUserIdMap = {};
+            const subLabelToUserIdMap = {}
             if (labelIdentifiers.size > 0) {
-                const users = await User.find({
+                const labelUsers = await User.find({
                     third_party_username: { $in: Array.from(labelIdentifiers) }
-                }).select('id third_party_username').lean();
+                }).select("id third_party_username").lean();
 
-                users.forEach(user => {
+                labelUsers.forEach(user => {
                     labelToUserIdMap[user.third_party_username] = user.id;
+                });
+            }
+
+
+            if (subLabelIdentifiers.size > 0) {
+                const subLabelUsers = await User.find({
+                    third_party_username: { $in: Array.from(subLabelIdentifiers) }
+                }).select("id third_party_username").lean();
+
+                subLabelUsers.forEach(user => {
+                    subLabelToUserIdMap[user.third_party_username] = user.id;
                 });
             }
 
@@ -473,7 +504,9 @@ class revenueUploadController {
             rowsWithData.forEach(row => {
                 let assignedUserId = 0;
 
-                if (row.labelCodeFromFile && labelToUserIdMap[String(row.labelCodeFromFile).trim()]) {
+                if (row.subLabelCodeFromFile && subLabelToUserIdMap[String(row.subLabelCodeFromFile).trim()]) {
+                    assignedUserId = subLabelToUserIdMap[String(row.subLabelCodeFromFile).trim()];
+                } else if (row.labelCodeFromFile && labelToUserIdMap[String(row.labelCodeFromFile).trim()]) {
                     assignedUserId = labelToUserIdMap[String(row.labelCodeFromFile).trim()];
                 }
 
@@ -3021,8 +3054,20 @@ class revenueUploadController {
                 });
             }
 
-            const tempReportResult = await TempReport.deleteMany({
-                uploadId: userId
+            const youtubePlatforms = [
+                "SoundRecording",
+                "YouTubeArtTrack",
+                "YouTubePartnerChannel",
+                "YouTubeRDCChannel",
+                "YouTubeVideoClaim",
+                "YTPremiumRevenue"
+            ];
+
+            const isYouTube = youtubePlatforms.includes(revenueUploadResult.platform);
+            const TempModel = isYouTube ? TempYoutube : TempReport;
+
+            const tempReportResult = await TempModel.deleteMany({
+                uploadId: revenueUploadResult._id
             });
 
             return res.status(200).json({
