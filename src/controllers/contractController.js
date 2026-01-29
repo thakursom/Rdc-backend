@@ -38,11 +38,13 @@ class contractController {
                 });
             }
 
-            // Only relative path
             const relativePath = `uploads/contracts/${req.file.filename}`;
-
-            // Use BASE_URL from env ALWAYS
             const fileURL = `${process.env.BASE_URL}/${relativePath}`;
+
+            await Contract.updateMany(
+                { user_id: label, status: "active" },
+                { $set: { status: "expired" } }
+            );
 
             const newContract = await Contract.create({
                 user_id: label,
@@ -52,6 +54,7 @@ class contractController {
                 endDate,
                 labelPercentage: labelPercentage || 0,
                 pdf: fileURL,
+                status: "active"
             });
 
             await ContractLog.create({
